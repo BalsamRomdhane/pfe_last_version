@@ -31,20 +31,18 @@ class LoginView(APIView):
                         token_response = keycloak_service.authenticate_user(login_field, password)
                         access_token = token_response.get('access_token')
                     except Exception as keycloak_error:
-                        # If Keycloak fails with "not fully set up", try Django fallback
-                        error_msg = str(keycloak_error).lower()
-                        if 'not fully set up' in error_msg or 'required action' in error_msg:
-                            try:
-                                token_response = keycloak_service.authenticate_user_django_only(login_field, password)
-                                access_token = token_response.get('access_token')
-                            except Exception as django_error:
-                                return Response({
-                                    'error': 'Authentication failed',
-                                    'detail': str(django_error),
-                                    'note': 'Keycloak account needs setup. You can try with bypass_keycloak=true in the request body.'
-                                }, status=status.HTTP_401_UNAUTHORIZED)
-                        else:
-                            raise keycloak_error
+                        # If Keycloak is unavailable or account is not fully set up, fall back to Django auth.
+                        error_msg = str(keycloak_error)
+                        try:
+                            token_response = keycloak_service.authenticate_user_django_only(login_field, password)
+                            access_token = token_response.get('access_token')
+                        except Exception as django_error:
+                            return Response({
+                                'error': 'Authentication failed',
+                                'detail': str(django_error),
+                                'keycloak_error': error_msg,
+                                'note': 'Keycloak is unavailable or account not present. Tried Django fallback.'
+                            }, status=status.HTTP_401_UNAUTHORIZED)
                 else:
                     # Django-only authentication
                     try:

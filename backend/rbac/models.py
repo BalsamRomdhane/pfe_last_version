@@ -65,3 +65,34 @@ class UserProfile(models.Model):
         self.full_clean()
         super().save(*args, **kwargs)
 
+
+class AuditLog(models.Model):
+    """Track changes to user profiles and authentication events"""
+    ACTION_CHOICES = [
+        ('CREATE', 'User Created'),
+        ('UPDATE', 'User Updated'),
+        ('DELETE', 'User Deleted'),
+        ('LOGIN', 'User Logged In'),
+        ('PASSWORD_CHANGE', 'Password Changed'),
+        ('ROLE_CHANGE', 'Role Changed'),
+        ('DEPARTMENT_CHANGE', 'Department Changed'),
+    ]
+    
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    target_user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='audit_logs_as_target')
+    description = models.TextField(blank=True)
+    changes = models.JSONField(default=dict, blank=True)  # Store what changed
+    timestamp = models.DateTimeField(auto_now_add=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    
+    class Meta:
+        ordering = ['-timestamp']
+        indexes = [
+            models.Index(fields=['user', '-timestamp']),
+            models.Index(fields=['action', '-timestamp']),
+        ]
+    
+    def __str__(self):
+        return f"{self.action} by {self.user} at {self.timestamp}"
+
