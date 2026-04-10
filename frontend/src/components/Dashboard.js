@@ -1,82 +1,120 @@
 import React, { useContext } from 'react';
-import { Box, Drawer, List, ListItem, ListItemText, Typography, Grid, Card, CardContent } from '@mui/material';
 import { UserContext } from '../context/UserContext';
-import UserManagement from './UserManagement';
-import ApiTesting from './ApiTesting';
-
-const drawerWidth = 240;
+import Layout from './Layout';
+import { Users, Building, Activity, CheckCircle } from 'lucide-react';
 
 const Dashboard = () => {
-  const { user, logout } = useContext(UserContext);
+  const { user, userProfile } = useContext(UserContext);
 
-  const renderContent = () => {
-    if (user.role === 'ADMIN') {
-      return <UserManagement />;
-    } else {
-      return (
-        <Box>
-          <Typography variant="h4">Dashboard for {user.department}</Typography>
-          <Grid container spacing={2} sx={{ mt: 2 }}>
-            <Grid item xs={12} md={6}>
-              <Card>
-                <CardContent>
-                  <Typography variant="h6">Department: {user.department}</Typography>
-                  <Typography>Role: {user.role}</Typography>
-                </CardContent>
-              </Card>
-            </Grid>
-            <Grid item xs={12} md={6}>
-              <Card>
-                <CardContent>
-                  <Typography variant="h6">API Testing</Typography>
-                  <ApiTesting />
-                </CardContent>
-              </Card>
-            </Grid>
-          </Grid>
-        </Box>
-      );
-    }
-  };
+  const displayDepartment = userProfile?.department || user?.department || (user?.role === 'ADMIN' ? 'Global' : 'N/A');
+
+  const stats = [
+    {
+      title: 'Total Users',
+      value: '---',
+      subtitle: 'Go to Users to view',
+      icon: <Users size={24} />,
+      color: 'text-blue-600',
+      bgColor: 'bg-blue-100',
+    },
+    {
+      title: 'Departments',
+      value: '4',
+      subtitle: 'DIGITAL, AERONAUTIQUE, AUTOMOBILE, QUALITE',
+      icon: <Building size={24} />,
+      color: 'text-orange-600',
+      bgColor: 'bg-orange-100',
+    },
+    {
+      title: 'Active Sessions',
+      value: '1',
+      subtitle: 'Current session',
+      icon: <Activity size={24} />,
+      color: 'text-green-600',
+      bgColor: 'bg-green-100',
+    },
+    {
+      title: 'System Status',
+      value: 'Online',
+      subtitle: 'All systems operational',
+      icon: <CheckCircle size={24} />,
+      color: 'text-green-600',
+      bgColor: 'bg-green-100',
+    },
+  ];
 
   return (
-    <Box sx={{ display: 'flex' }}>
-      <Drawer
-        sx={{
-          width: drawerWidth,
-          flexShrink: 0,
-          '& .MuiDrawer-paper': {
-            width: drawerWidth,
-            boxSizing: 'border-box',
-          },
-        }}
-        variant="permanent"
-        anchor="left"
-      >
-        <List>
-          <ListItem>
-            <ListItemText primary={`Welcome, ${user.username}`} secondary={`${user.role} - ${user.department || 'Global'}`} />
-          </ListItem>
-          <ListItem button onClick={() => window.location.href = '/dashboard'}>
-            <ListItemText primary="Dashboard" />
-          </ListItem>
-          {user.role === 'ADMIN' && (
-            <ListItem button onClick={() => window.location.href = '/users'}>
-              <ListItemText primary="Users" />
-            </ListItem>
-          )}
-          <ListItem button onClick={() => window.location.href = '/api-testing'}>
-            <ListItemText primary="API Testing" />
-          </ListItem>
-          <ListItem button onClick={logout}>
-            <ListItemText primary="Logout" />
-          </ListItem>
-        </List>
-      </Drawer>
-      <Box component="main" sx={{ flexGrow: 1, p: 3 }}>
-        {renderContent()}
-      </Box>
-    </Box>
+    <Layout>
+      <div className="space-y-6">
+        {/* Header */}
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900">Dashboard Overview</h1>
+          <p className="text-gray-600 mt-1">Welcome back, {user?.username}</p>
+        </div>
+
+        {/* User Info Card */}
+        <div className="bg-white rounded-xl shadow-md p-6">
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">User Information</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <p className="text-sm text-gray-500">Username</p>
+              <p className="text-lg font-medium text-gray-900">{user?.username}</p>
+            </div>
+            <div>
+              <p className="text-sm text-gray-500">Role</p>
+              <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800">
+                {user?.role}
+              </span>
+            </div>
+            <div className="md:col-span-2">
+              <p className="text-sm text-gray-500">Department</p>
+              <p className="text-lg font-medium text-gray-900">{displayDepartment}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Stats Grid */}
+        {user?.role === 'ADMIN' && (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            {stats.map((stat, index) => (
+              <div key={index} className="bg-white rounded-xl shadow-md p-6 hover:shadow-lg transition-shadow duration-200">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-gray-600">{stat.title}</p>
+                    <p className="text-2xl font-bold text-gray-900 mt-1">{stat.value}</p>
+                    <p className="text-xs text-gray-500 mt-1">{stat.subtitle}</p>
+                  </div>
+                  <div className={`p-3 rounded-lg ${stat.bgColor}`}>
+                    <div className={stat.color}>
+                      {stat.icon}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Quick Actions */}
+        <div className="bg-white rounded-xl shadow-md p-6">
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">Quick Actions</h2>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <button className="p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors duration-200 text-left">
+              <h3 className="font-medium text-gray-900">Manage Users</h3>
+              <p className="text-sm text-gray-600 mt-1">Add, edit, or remove users</p>
+            </button>
+            <button className="p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors duration-200 text-left">
+              <h3 className="font-medium text-gray-900">View Departments</h3>
+              <p className="text-sm text-gray-600 mt-1">Manage department structure</p>
+            </button>
+            <button className="p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors duration-200 text-left">
+              <h3 className="font-medium text-gray-900">API Testing</h3>
+              <p className="text-sm text-gray-600 mt-1">Test API endpoints</p>
+            </button>
+          </div>
+        </div>
+      </div>
+    </Layout>
   );
 };
 

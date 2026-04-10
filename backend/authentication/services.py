@@ -96,12 +96,20 @@ class KeycloakService:
         if not user:
             raise Exception('Invalid username or password.')
 
+        try:
+            profile = UserProfile.objects.get(user=user)
+        except UserProfile.DoesNotExist:
+            raise Exception('User profile is required for RBAC authentication.')
+
         # Create a mock JWT token for Django-authenticated user
         # This will be decoded by KeycloakAuthentication as if it came from Keycloak
         payload = {
             'preferred_username': username,
             'sub': username,
-            'realm_access': {'roles': []},
+            'realm_access': {'roles': [profile.role.code]},
+            'attributes': {
+                'department': [profile.department.code] if profile.department else [],
+            },
             'iat': datetime.utcnow().timestamp(),
             'exp': (datetime.utcnow() + timedelta(hours=1)).timestamp(),
             'source': 'django_fallback',  # Marker that this came from Django, not Keycloak
@@ -149,3 +157,95 @@ class KeycloakService:
             'department_name': profile.department.name if profile.department else None,
             'theme_color': profile.department.theme_color if profile.department else '#1976d2',  # Default blue for ADMIN
         }
+
+    def get_keycloak_admin_token(self):
+        """Get admin token for Keycloak admin API operations"""
+        token_url = f'{self.server_url}/realms/master/protocol/openid-connect/token'
+        payload = {
+            'grant_type': 'client_credentials',
+            'client_id': self.client_id,
+            'client_secret': self.client_secret,
+        }
+        response = requests.post(token_url, data=payload)
+        if response.status_code != 200:
+            raise Exception(f'Failed to get admin token: {response.status_code} {response.text}')
+        return response.json().get('access_token')
+
+    def create_user_in_keycloak(self, username, email, password, first_name='', last_name=''):
+        """
+        Create a new user in Keycloak.
+        NOTE: Requires admin credentials in Keycloak settings.
+        """
+        try:
+            admin_token = self.get_keycloak_admin_token()
+        except Exception as e:
+            # If Keycloak admin API fails, continue anyway (user can be created in Django only)
+            print(f'Warning: Could not create user in Keycloak: {e}')
+            return None
+
+        url = f'{self.server_url}/admin/realms/{self.realm}/users'
+        headers = {
+            'Authorization': f'Bearer {admin_token}',
+            'Content-Type': 'application/json'
+        }
+        payload = {
+            'username': username,
+            'email': email,
+            'firstName': first_name,
+            'lastName': last_name,
+            'enabled': True,
+            'credentials': [{
+                'type': 'password',
+                'value': password,
+                'temporary': False
+            }]
+        }
+
+        response = requests.post(url, json=payload, headers=headers)
+        
+        if response.status_code == 201:
+            # Extract user ID from location header
+            location = response.headers.get('Location', '')
+            keycloak_id = location.split('/')[-1] if location else None
+            return keycloak_id
+        elif response.status_code == 409:
+            # User already exists
+            return None
+        else:
+            raise Exception(f'Failed to create user in Keycloak: {response.status_code} {response.text}')
+
+    def delete_user_from_keycloak(self, keycloak_id):
+        """Delete user from Keycloak by ID"""
+        try:
+            admin_token = self.get_keycloak_admin_token()
+        except Exception as e:
+            print(f'Warning: Could not delete user from Keycloak: {e}')
+            return False
+
+        url = f'{self.server_url}/admin/realms/{self.realm}/users/{keycloak_id}'
+        headers = {'Authorization': f'Bearer {admin_token}'}
+
+        response = requests.delete(url, headers=headers)
+        return response.status_code in [200, 204]
+
+    def update_user_password_in_keycloak(self, keycloak_id, password):
+        """Update user password in Keycloak"""
+        try:
+            admin_token = self.get_keycloak_admin_token()
+        except Exception as e:
+            print(f'Warning: Could not update password in Keycloak: {e}')
+            return False
+
+        url = f'{self.server_url}/admin/realms/{self.realm}/users/{keycloak_id}/reset-password'
+        headers = {
+            'Authorization': f'Bearer {admin_token}',
+            'Content-Type': 'application/json'
+        }
+        payload = {
+            'type': 'password',
+            'value': password,
+            'temporary': False
+        }
+
+        response = requests.put(url, json=payload, headers=headers)
+        return response.status_code in [200, 204]

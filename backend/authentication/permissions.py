@@ -7,7 +7,12 @@ class KeycloakRolePermission(BasePermission):
         user = request.user
         if not getattr(user, 'is_authenticated', False):
             return False
-        return self.required_role in getattr(user, 'roles', [])
+
+        roles = getattr(user, 'roles', []) or []
+        if not isinstance(roles, list):
+            roles = [roles]
+        normalized_roles = [str(role).upper() for role in roles if role]
+        return self.required_role.upper() in normalized_roles
 
 class IsAdmin(KeycloakRolePermission):
     required_role = 'ADMIN'
@@ -24,11 +29,14 @@ class DepartmentAccess(BasePermission):
         if not getattr(user, 'is_authenticated', False):
             return False
 
-        roles = getattr(user, 'roles', [])
+        roles = getattr(user, 'roles', []) or []
+        if not isinstance(roles, list):
+            roles = [roles]
+        normalized_roles = [str(role).upper() for role in roles if role]
         department = getattr(user, 'department', None)
 
-        if 'ADMIN' in roles:
+        if 'ADMIN' in normalized_roles:
             return True
-        if 'TEAMLEAD' in roles or 'EMPLOYEE' in roles:
+        if 'TEAMLEAD' in normalized_roles or 'EMPLOYEE' in normalized_roles:
             return bool(department)
         return False
