@@ -8,8 +8,8 @@ import Login from './components/Login';
 import Dashboard from './components/Dashboard.jsx';
 import Users from './components/Users';
 import Departments from './components/Departments';
-import ApiTesting from './components/ApiTesting';
 import System from './components/System';
+import ResetPassword from './components/ResetPassword';
 
 // Admin panel redirect component
 function AdminRedirect() {
@@ -47,12 +47,23 @@ function AppContent() {
     return children;
   };
 
+  const RoleProtectedRoute = ({ children, roles }) => {
+    if (!user) {
+      return <Navigate to="/login" />;
+    }
+    if (!roles.includes(user.role)) {
+      return <Navigate to="/dashboard" />;
+    }
+    return children;
+  };
+
   return (
     <ThemeProvider theme={getTheme()}>
       <CssBaseline />
       <Router>
         <Routes>
           <Route path="/login" element={!user ? <Login /> : <Navigate to="/dashboard" />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
           
           <Route
             path="/dashboard"
@@ -66,27 +77,18 @@ function AppContent() {
           <Route
             path="/users"
             element={
-              <ProtectedRoute>
+              <RoleProtectedRoute roles={['ADMIN']}>
                 <Users />
-              </ProtectedRoute>
+              </RoleProtectedRoute>
             }
           />
           
           <Route
             path="/departments"
             element={
-              <ProtectedRoute>
+              <RoleProtectedRoute roles={['ADMIN']}>
                 <Departments />
-              </ProtectedRoute>
-            }
-          />
-          
-          <Route
-            path="/api-testing"
-            element={
-              <ProtectedRoute>
-                <ApiTesting />
-              </ProtectedRoute>
+              </RoleProtectedRoute>
             }
           />
           

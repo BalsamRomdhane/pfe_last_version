@@ -27,7 +27,7 @@ const Login = () => {
   const navigate = useNavigate();
   const { login } = useContext(UserContext);
   const [formData, setFormData] = useState({
-    username: '',
+    login: '',
     password: '',
   });
   const [loading, setLoading] = useState(false);
@@ -48,11 +48,13 @@ const Login = () => {
     setLoading(true);
     setError('');
 
+    const loginField = formData.login.trim();
+    const payload = loginField.includes('@')
+      ? { email: loginField, password: formData.password }
+      : { username: loginField, password: formData.password };
+
     try {
-      const response = await api.post('/auth/login/', {
-        username: formData.username,
-        password: formData.password,
-      });
+      const response = await api.post('/auth/login/', payload);
 
       const { access_token, user } = response.data;
       login(access_token, user);
@@ -170,18 +172,19 @@ const Login = () => {
               gap: 2.5,
             }}
           >
-            {/* Username Field */}
+            {/* Username or Email Field */}
             <TextField
               fullWidth
-              label="Username"
-              name="username"
+              label="Username or Email"
+              name="login"
               type="text"
-              value={formData.username}
+              value={formData.login}
               onChange={handleChange}
               onKeyPress={handleKeyPress}
               disabled={loading}
               autoComplete="username"
               autoFocus
+              helperText="Enter your username or email address"
               sx={{
                 '& .MuiOutlinedInput-root': {
                   borderRadius: 1.5,
@@ -259,7 +262,7 @@ const Login = () => {
             <Button
               fullWidth
               type="submit"
-              disabled={loading || !formData.username || !formData.password}
+              disabled={loading || !formData.login || !formData.password}
               sx={{
                 padding: '12px 16px',
                 background: `linear-gradient(135deg, ${CAPGEMINI_BLUE} 0%, #0052A3 100%)`,

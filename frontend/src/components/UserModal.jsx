@@ -23,7 +23,9 @@ const UserModal = ({
   // ✅ STATE
   const [form, setForm] = useState({
     username: '',
+    nom: '',
     email: '',
+    date_naissance: '',
     password: '',
     role: 'EMPLOYEE',
     department: ''
@@ -38,7 +40,9 @@ const UserModal = ({
     if (mode === 'edit' && initialData) {
       setForm({
         username: initialData.username || '',
+        nom: initialData.last_name || initialData.username || '',
         email: initialData.email || '',
+        date_naissance: initialData.date_naissance || '',
         password: '',
         role: initialData.role || 'EMPLOYEE',
         department: initialData.department || ''
@@ -46,7 +50,9 @@ const UserModal = ({
     } else {
       setForm({
         username: '',
+        nom: '',
         email: '',
+        date_naissance: '',
         password: '',
         role: 'EMPLOYEE',
         department: ''
@@ -67,14 +73,14 @@ const UserModal = ({
   const handleSubmit = async (e) => {
     e.preventDefault();
 
-    if (!form.username.trim() || !form.email.trim()) {
-      setValidationError('Username and email are required.');
+    if (!form.username.trim() || !form.nom.trim() || !form.email.trim() || !form.date_naissance.trim()) {
+      setValidationError('Username, nom, email, and date de naissance are required.');
       return;
     }
 
     if (mode === 'create' && !form.password.trim()) {
-      setValidationError('Password is required for new users.');
-      return;
+      // password may be generated automatically by backend, but allow initial input if provided
+      // no error here
     }
 
     if (showDepartmentField && !form.department) {
@@ -84,13 +90,22 @@ const UserModal = ({
 
     setValidationError('');
 
-    const payload = {
-      username: form.username.trim(),
-      email: form.email.trim(),
-      ...(mode === 'create' ? { password: form.password.trim() } : {}),
-      role: form.role,
-      ...(showDepartmentField ? { department: form.department } : {})
-    };
+    const payload = mode === 'edit'
+      ? {
+          first_name: form.nom.trim(),
+          last_name: form.nom.trim(),
+          role: form.role,
+          ...(showDepartmentField ? { department: form.department } : { department: null }),
+        }
+      : {
+          username: form.username.trim(),
+          nom: form.nom.trim(),
+          email: form.email.trim(),
+          date_naissance: form.date_naissance.trim(),
+          ...(form.password.trim() ? { password: form.password.trim() } : {}),
+          role: form.role,
+          ...(showDepartmentField ? { department: form.department } : {}),
+        };
 
     await onSubmit(payload);
   };
@@ -127,6 +142,14 @@ const UserModal = ({
           />
 
           <input
+            name="nom"
+            placeholder="Nom"
+            value={form.nom}
+            onChange={handleChange}
+            className="w-full border p-2 rounded"
+          />
+
+          <input
             name="email"
             placeholder="Email"
             value={form.email}
@@ -135,15 +158,28 @@ const UserModal = ({
             disabled={mode === 'edit'}
           />
 
+          <input
+            name="date_naissance"
+            placeholder="Date de naissance (DD/MM/YYYY)"
+            value={form.date_naissance}
+            onChange={handleChange}
+            className="w-full border p-2 rounded"
+          />
+
           {mode === 'create' && (
-            <input
-              name="password"
-              type="password"
-              placeholder="Password"
-              value={form.password}
-              onChange={handleChange}
-              className="w-full border p-2 rounded"
-            />
+            <>
+              <input
+                name="password"
+                type="password"
+                placeholder="Password (laisser vide pour génération automatique)"
+                value={form.password}
+                onChange={handleChange}
+                className="w-full border p-2 rounded"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Laissez vide pour générer automatiquement le mot de passe à partir du username et de la date de naissance.
+              </p>
+            </>
           )}
 
           <select

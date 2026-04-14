@@ -1,3 +1,5 @@
+from django.contrib.auth.models import User
+from django.contrib.auth.models import User
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -5,6 +7,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from .serializers import LoginSerializer, DjangoLoginSerializer
 from .services import KeycloakService
 from .authentication import KeycloakAuthentication
+from rbac.models import UserProfile
 
 
 class LoginView(APIView):
@@ -64,6 +67,24 @@ class LoginView(APIView):
                         'detail': str(profile_error),
                         'access_token': access_token  # Still return token for admin to create profile
                     }, status=status.HTTP_403_FORBIDDEN)
+
+                # Step 2.5: Enforce first-login reset if needed
+                if profile.get('is_first_login'):
+                    try:
+                        reset_token = keycloak_service.generate_first_login_token(profile['username'])
+                        user = User.objects.get(username=profile['username'])
+                        keycloak_service.send_first_login_email(user, reset_token)
+                    except Exception as reset_error:
+                        return Response({
+                            'error': 'Première connexion détectée',
+                            'detail': f'Impossible d\'envoyer l\'email de réinitialisation : {reset_error}'
+                        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+                    return Response({
+                        'error': 'Première connexion détectée. Veuillez vérifier votre email pour modifier votre mot de passe.',
+                        'detail': 'Un email de réinitialisation a été envoyé.',
+                        'email': profile.get('email')
+                    }, status=status.HTTP_403_FORBIDDEN)
                 
                 # Step 3: Return token + profile
                 return Response({
@@ -84,6 +105,59 @@ class LoginView(APIView):
                     'detail': detail
                 }, status=status_code)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class PasswordResetView(APIView):
+    """
+    Reset the user's password after first login using a secure one-time token.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        from .serializers import PasswordResetSerializer
+        serializer = PasswordResetSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({
+                'error': 'Invalid input',
+                'detail': serializer.errors
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            keycloak_service = KeycloakService()
+            decoded = keycloak_service.verify_first_login_token(serializer.validated_data['token'])
+            username = decoded.get('username')
+            user = User.objects.get(username=username)
+            profile = UserProfile.objects.get(user=user)
+
+            user.set_password(serializer.validated_data['new_password'])
+            user.save()
+
+            profile.is_first_login = False
+            profile.save()
+
+            if profile.keycloak_id:
+                try:
+                    keycloak_service.update_user_password_in_keycloak(profile.keycloak_id, serializer.validated_data['new_password'])
+                except Exception as kc_error:
+                    print(f'Keycloak password update warning: {kc_error}')
+
+            return Response({
+                'status': 'success',
+                'message': 'Mot de passe mis à jour avec succès. Vous pouvez maintenant vous connecter.'
+            }, status=status.HTTP_200_OK)
+        except User.DoesNotExist:
+            return Response({
+                'error': 'Utilisateur introuvable'
+            }, status=status.HTTP_404_NOT_FOUND)
+        except UserProfile.DoesNotExist:
+            return Response({
+                'error': 'Profil utilisateur introuvable'
+            }, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({
+                'error': 'Impossible de réinitialiser le mot de passe',
+                'detail': str(e)
+            }, status=status.HTTP_400_BAD_REQUEST)
 
 
 class GetUserProfileView(APIView):

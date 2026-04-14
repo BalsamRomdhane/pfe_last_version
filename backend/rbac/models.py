@@ -45,6 +45,8 @@ class UserProfile(models.Model):
     role = models.ForeignKey(Role, on_delete=models.PROTECT)
     department = models.ForeignKey(Department, on_delete=models.SET_NULL, null=True, blank=True)
     keycloak_id = models.CharField(max_length=255, blank=True, null=True)  # Allow null, not unique
+    date_naissance = models.DateField(null=True, blank=True)
+    is_first_login = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     

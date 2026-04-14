@@ -86,6 +86,8 @@ class UserListCreateView(APIView):
                     'role_name': profile.role.name,
                     'department': profile.department.code if profile.department else None,
                     'department_name': profile.department.name if profile.department else None,
+                    'date_naissance': profile.date_naissance.isoformat() if profile.date_naissance else None,
+                    'is_first_login': profile.is_first_login,
                     'keycloak_id': profile.keycloak_id,
                     'created_at': profile.created_at.isoformat() if profile.created_at else None,
                 })
@@ -125,6 +127,7 @@ class UserListCreateView(APIView):
                 password = serializer.validated_data['password']
                 first_name = serializer.validated_data.get('first_name', '')
                 last_name = serializer.validated_data.get('last_name', '')
+                date_naissance = serializer.validated_data.get('date_naissance')
                 role_code = serializer.validated_data['role']
                 department_code = serializer.validated_data.get('department')
 
@@ -132,10 +135,21 @@ class UserListCreateView(APIView):
                 try:
                     role = Role.objects.get(code=role_code)
                 except Role.DoesNotExist:
-                    return Response({
-                        'error': 'Role not found',
-                        'detail': f'Role {role_code} does not exist'
-                    }, status=status.HTTP_400_BAD_REQUEST)
+                    if role_code in ['ADMIN', 'TEAMLEAD', 'EMPLOYEE']:
+                        role_names = {
+                            'ADMIN': 'Administrator',
+                            'TEAMLEAD': 'Team Lead',
+                            'EMPLOYEE': 'Employee',
+                        }
+                        role, _ = Role.objects.get_or_create(
+                            code=role_code,
+                            defaults={'name': role_names.get(role_code, role_code.title())}
+                        )
+                    else:
+                        return Response({
+                            'error': 'Role not found',
+                            'detail': f'Role {role_code} does not exist'
+                        }, status=status.HTTP_400_BAD_REQUEST)
 
                 department = None
                 if department_code:
@@ -176,10 +190,12 @@ class UserListCreateView(APIView):
                     user=django_user,
                     role=role,
                     department=department,
-                    keycloak_id=keycloak_id
+                    keycloak_id=keycloak_id,
+                    date_naissance=date_naissance,
+                    is_first_login=True
                 )
 
-                return Response({
+                response_data = {
                     'status': 'success',
                     'message': 'User created successfully',
                     'data': {
@@ -191,8 +207,21 @@ class UserListCreateView(APIView):
                         'role': user_profile.role.code,
                         'department': user_profile.department.code if user_profile.department else None,
                         'keycloak_id': keycloak_id,
+                        'date_naissance': user_profile.date_naissance.isoformat() if user_profile.date_naissance else None,
+                        'is_first_login': user_profile.is_first_login,
                     }
-                }, status=status.HTTP_201_CREATED)
+                }
+
+                if not request.data.get('password'):
+                    response_data['generated_password'] = password
+
+                if keycloak_id is None:
+                    response_data['keycloak_created'] = False
+                    response_data['keycloak_error'] = 'Keycloak user creation failed or user already exists.'
+                else:
+                    response_data['keycloak_created'] = True
+
+                return Response(response_data, status=status.HTTP_201_CREATED)
 
         except Exception as e:
             return Response({
