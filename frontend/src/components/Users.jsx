@@ -87,6 +87,15 @@ const Users = () => {
     }
   };
 
+  const getSubmitError = (err) => {
+    const detail = err?.response?.data?.detail;
+    const error = err?.response?.data?.error;
+    if (typeof detail === 'string' && detail.trim()) return detail;
+    if (typeof error === 'string' && error.trim()) return error;
+    if (detail && typeof detail === 'object') return JSON.stringify(detail);
+    return err?.message || 'Unable to save user. Please try again.';
+  };
+
   const handleModalSubmit = async (payload) => {
     setModalError('');
     setModalLoading(true);
@@ -96,15 +105,24 @@ const Users = () => {
         await api.put(`/rbac/users/${selectedUser.id}/`, payload);
         showToast('User updated successfully.');
       } else {
-        await api.post('/rbac/users/', payload);
-        showToast('User created successfully.');
+        const response = await api.post('/rbac/users/', payload);
+        const generatedPassword = response.data?.generated_password;
+        const keycloakWarning = response.data?.keycloak_created === false
+          ? ' (Keycloak creation may have failed.)'
+          : '';
+
+        if (generatedPassword) {
+          showToast(`User created. Password: ${generatedPassword}${keycloakWarning}`);
+        } else {
+          showToast(`User created successfully.${keycloakWarning}`);
+        }
       }
       setModalOpen(false);
       setSelectedUser(null);
       fetchUsers();
     } catch (err) {
-      console.error(err);
-      setModalError('Unable to save user. Please try again.');
+      console.error('User save error', err?.response?.data || err);
+      setModalError(getSubmitError(err));
     } finally {
       setModalLoading(false);
     }

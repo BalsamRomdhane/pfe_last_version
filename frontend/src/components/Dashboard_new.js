@@ -13,7 +13,6 @@ import Sidebar from './Sidebar';
 import Topbar from './Topbar';
 import UserManagement from './UserManagement';
 import DepartmentManagement from './DepartmentManagement';
-import ApiTesting from './ApiTesting';
 
 const drawerWidth = 280;
 const CAPGEMINI_BLUE = '#0070AD';
@@ -44,8 +43,6 @@ const Dashboard = () => {
         return user?.role === 'ADMIN' ? <UserManagement /> : null;
       case 'departments':
         return user?.role === 'ADMIN' ? <DepartmentManagement /> : null;
-      case 'api':
-        return <ApiTesting />;
       case 'system':
         return user?.role === 'ADMIN' ? <SystemPage /> : null;
       default:

@@ -38,6 +38,7 @@ const UserManagement = () => {
     username: '',
     email: '',
     password: '',
+    date_naissance: '',
     first_name: '',
     last_name: '',
     role: 'EMPLOYEE',
@@ -68,6 +69,7 @@ const UserManagement = () => {
       setFormData({
         username: user.username,
         email: user.email,
+        date_naissance: user.date_naissance || '',
         first_name: user.first_name,
         last_name: user.last_name,
         role: user.role,
@@ -80,6 +82,7 @@ const UserManagement = () => {
         username: '',
         email: '',
         password: '',
+        date_naissance: '',
         first_name: '',
         last_name: '',
         role: 'EMPLOYEE',
@@ -96,7 +99,11 @@ const UserManagement = () => {
 
   const handleFormChange = (e) => {
     const { name, value } = e.target;
-    setFormData({ ...formData, [name]: value });
+    const nextForm = { ...formData, [name]: value };
+    if (name === 'role' && value === 'ADMIN') {
+      nextForm.department = '';
+    }
+    setFormData(nextForm);
   };
 
   const handleSaveUser = async () => {
@@ -110,18 +117,27 @@ const UserManagement = () => {
           first_name: formData.first_name,
           last_name: formData.last_name,
           role: formData.role,
-          department: formData.department || null,
+          department: formData.role === 'ADMIN' ? null : formData.department || null,
         };
         await api.put(`/rbac/users/${editingUser.id}/`, updateData);
         setSuccess('User updated successfully');
       } else {
-        // Create user
-        if (!formData.password) {
-          setError('Password is required for new users');
-          return;
+        // Create user - password can be generated automatically by backend if omitted
+        const createData = {
+          ...formData,
+          department: formData.role === 'ADMIN' ? null : formData.department || null,
+        };
+        const response = await api.post('/rbac/users/', createData);
+        const generatedPassword = response.data?.generated_password;
+        const keycloakWarning = response.data?.keycloak_created === false
+          ? ' Keycloak user creation may have failed.'
+          : '';
+
+        if (generatedPassword) {
+          setSuccess(`User created. Generated password: ${generatedPassword}.${keycloakWarning}`);
+        } else {
+          setSuccess(`User created successfully.${keycloakWarning}`);
         }
-        await api.post('/rbac/users/', formData);
-        setSuccess('User created successfully');
       }
 
       fetchUsers();
@@ -281,17 +297,30 @@ const UserManagement = () => {
             helperText={editingUser ? 'Email cannot be changed' : ''}
           />
           {!editingUser && (
-            <TextField
-              fullWidth
-              label="Password"
-              name="password"
-              type="password"
-              value={formData.password}
-              onChange={handleFormChange}
-              margin="normal"
-              required
-              helperText="Minimum 8 characters"
-            />
+            <>
+              <TextField
+                fullWidth
+                label="Password"
+                name="password"
+                type="password"
+                value={formData.password}
+                onChange={handleFormChange}
+                margin="normal"
+                helperText="Optional: leave blank to generate automatically"
+              />
+              <TextField
+                fullWidth
+                label="Date de naissance"
+                name="date_naissance"
+                type="date"
+                value={formData.date_naissance}
+                onChange={handleFormChange}
+                margin="normal"
+                InputLabelProps={{ shrink: true }}
+                required
+                helperText="Required for new users"
+              />
+            </>
           )}
           <TextField
             fullWidth

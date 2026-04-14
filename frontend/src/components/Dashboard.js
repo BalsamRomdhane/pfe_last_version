@@ -95,24 +95,6 @@ const Dashboard = () => {
           </div>
         )}
 
-        {/* Quick Actions */}
-        <div className="bg-white rounded-xl shadow-md p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Quick Actions</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <button className="p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors duration-200 text-left">
-              <h3 className="font-medium text-gray-900">Manage Users</h3>
-              <p className="text-sm text-gray-600 mt-1">Add, edit, or remove users</p>
-            </button>
-            <button className="p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors duration-200 text-left">
-              <h3 className="font-medium text-gray-900">View Departments</h3>
-              <p className="text-sm text-gray-600 mt-1">Manage department structure</p>
-            </button>
-            <button className="p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors duration-200 text-left">
-              <h3 className="font-medium text-gray-900">API Testing</h3>
-              <p className="text-sm text-gray-600 mt-1">Test API endpoints</p>
-            </button>
-          </div>
-        </div>
       </div>
     </Layout>
   );

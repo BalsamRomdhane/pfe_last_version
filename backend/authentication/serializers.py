@@ -1,28 +1,30 @@
+from datetime import datetime
 from rest_framework import serializers
 from django.contrib.auth.models import User
 from rbac.models import UserProfile, Role, Department, AuditLog
 
 class LoginSerializer(serializers.Serializer):
     """
-    Login serializer that accepts either username or email.
-    At least one of username or email must be provided.
+    Login serializer that accepts either username, email, or login.
+    At least one of username, email or login must be provided.
     """
+    login = serializers.CharField(required=False, allow_blank=True)
     username = serializers.CharField(required=False, allow_blank=True)
     email = serializers.EmailField(required=False, allow_blank=True)
     password = serializers.CharField()
     bypass_keycloak = serializers.BooleanField(required=False, default=False)
 
     def validate(self, data):
-        """Ensure either username or email is provided"""
+        """Ensure either username, email, or login is provided"""
+        login = data.get('login', '').strip()
         username = data.get('username', '').strip()
         email = data.get('email', '').strip()
-        
-        if not username and not email:
-            raise serializers.ValidationError("Either username or email must be provided")
-        
-        # Keep the non-empty one as 'username' for the rest of the flow
-        data['login_field'] = email if email else username
-        
+
+        if not login and not username and not email:
+            raise serializers.ValidationError("Either username, email, or login must be provided")
+
+        # Prefer explicit login, then email, then username.
+        data['login_field'] = login or email or username
         return data
 
 class DjangoLoginSerializer(serializers.Serializer):
@@ -30,6 +32,7 @@ class DjangoLoginSerializer(serializers.Serializer):
     Django-only login serializer that bypasses Keycloak.
     Authenticates directly against Django User model.
     """
+    login = serializers.CharField(required=False, allow_blank=True)
     username = serializers.CharField(required=False, allow_blank=True)
     email = serializers.EmailField(required=False, allow_blank=True)
     password = serializers.CharField()
@@ -71,11 +74,13 @@ class UserDetailSerializer(serializers.Serializer):
 
 class UserCreateSerializer(serializers.Serializer):
     """Serializer for creating a new user"""
-    username = serializers.CharField(max_length=150)
+    username = serializers.CharField(max_length=150, required=False, allow_blank=True)
+    nom = serializers.CharField(required=False, allow_blank=True, max_length=150)
     email = serializers.EmailField()
-    password = serializers.CharField(min_length=8)
-    first_name = serializers.CharField(required=False, default='')
-    last_name = serializers.CharField(required=False, default='')
+    date_naissance = serializers.CharField(required=True)
+    password = serializers.CharField(required=False, allow_blank=True)
+    first_name = serializers.CharField(required=False, allow_blank=True, default='')
+    last_name = serializers.CharField(required=False, allow_blank=True, default='')
     role = serializers.ChoiceField(choices=['ADMIN', 'TEAMLEAD', 'EMPLOYEE'])
     department = serializers.ChoiceField(
         choices=['DIGITAL', 'AERONAUTIQUE', 'AUTOMOBILE', 'QUALITE'], 
@@ -84,7 +89,7 @@ class UserCreateSerializer(serializers.Serializer):
     )
 
     def validate_username(self, value):
-        if User.objects.filter(username=value).exists():
+        if value and User.objects.filter(username=value).exists():
             raise serializers.ValidationError("Username already exists")
         return value
     
@@ -92,6 +97,20 @@ class UserCreateSerializer(serializers.Serializer):
         if User.objects.filter(email=value).exists():
             raise serializers.ValidationError("Email already exists")
         return value
+
+    def validate_password(self, value):
+        if value and len(value) < 8:
+            raise serializers.ValidationError("Password must be at least 8 characters long")
+        return value
+
+    def validate_date_naissance(self, value):
+        value = value.strip()
+        for fmt in ['%d/%m/%Y', '%Y-%m-%d']:
+            try:
+                return datetime.strptime(value, fmt).date()
+            except ValueError:
+                continue
+        raise serializers.ValidationError("date_naissance must be in DD/MM/YYYY or YYYY-MM-DD format")
 
     def validate(self, data):
         role = data.get('role')
@@ -102,7 +121,43 @@ class UserCreateSerializer(serializers.Serializer):
         
         if role in ['TEAMLEAD', 'EMPLOYEE'] and not department:
             raise serializers.ValidationError(f"{role} role must have a department")
-        
+
+        username = data.get('username', '').strip()
+        email = data.get('email')
+        if not username:
+            base_username = email.split('@')[0]
+            username = base_username
+            idx = 1
+            while User.objects.filter(username=username).exists():
+                username = f"{base_username}{idx}"
+                idx += 1
+            data['username'] = username
+
+        if not data.get('nom'):
+            explicit_first_name = (self.initial_data.get('first_name') or '').strip()
+            explicit_last_name = (self.initial_data.get('last_name') or '').strip()
+            data['nom'] = explicit_first_name or explicit_last_name or ''
+
+        if not data.get('password'):
+            explicit_first_name = (self.initial_data.get('first_name') or '').strip()
+            password_base = (
+                explicit_first_name or
+                data.get('username', '').strip() or
+                data.get('nom', '').strip()
+            )
+            date_naissance = data['date_naissance']
+            password = f"{password_base}{date_naissance.strftime('%d%m%Y')}".lower().replace(' ', '')
+            data['password'] = password
+
+        if len(data['password']) < 8:
+            raise serializers.ValidationError("Generated password must be at least 8 characters long")
+
+        # Always set first_name/last_name from nom if the user doesn't pass them explicitly
+        if not data.get('first_name'):
+            data['first_name'] = data['nom']
+        if not data.get('last_name'):
+            data['last_name'] = data['nom']
+
         return data
 
 class UserUpdateSerializer(serializers.Serializer):
@@ -119,17 +174,14 @@ class UserUpdateSerializer(serializers.Serializer):
         allow_null=True
     )
 
+class PasswordResetSerializer(serializers.Serializer):
+    token = serializers.CharField()
+    new_password = serializers.CharField(min_length=8)
+    confirm_password = serializers.CharField(min_length=8)
+
     def validate(self, data):
-        role = data.get('role')
-        department = data.get('department')
-        
-        if role is not None:
-            if role == 'ADMIN' and department:
-                raise serializers.ValidationError("ADMIN role cannot have a department")
-            
-            if role in ['TEAMLEAD', 'EMPLOYEE'] and not department and 'department' in data:
-                raise serializers.ValidationError(f"{role} role must have a department")
-        
+        if data.get('new_password') != data.get('confirm_password'):
+            raise serializers.ValidationError("Les mots de passe ne correspondent pas.")
         return data
 
 

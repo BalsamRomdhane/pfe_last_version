@@ -27,12 +27,6 @@ const Sidebar = () => {
       roles: ['ADMIN'],
     },
     {
-      label: 'API Testing',
-      icon: <Activity size={20} />,
-      path: '/api-testing',
-      roles: ['ADMIN', 'TEAMLEAD', 'EMPLOYEE'],
-    },
-    {
       label: 'System',
       icon: <Settings size={20} />,
       path: '/system',

@@ -1,10 +1,13 @@
+import datetime
 import json
 import requests
 import jwt
-from datetime import datetime, timedelta
+from datetime import timedelta
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
+from django.core.mail import send_mail
+from django.utils import timezone
 from rbac.models import UserProfile
 
 class KeycloakService:
@@ -18,6 +21,10 @@ class KeycloakService:
         self.realm = settings.KEYCLOAK_REALM
         self.client_id = settings.KEYCLOAK_CLIENT_ID
         self.client_secret = settings.KEYCLOAK_CLIENT_SECRET
+        self.admin_username = getattr(settings, 'KEYCLOAK_ADMIN_USERNAME', None)
+        self.admin_password = getattr(settings, 'KEYCLOAK_ADMIN_PASSWORD', None)
+        self.admin_client_id = getattr(settings, 'KEYCLOAK_ADMIN_CLIENT_ID', 'admin-cli')
+        self.admin_client_secret = getattr(settings, 'KEYCLOAK_ADMIN_CLIENT_SECRET', None)
 
     def authenticate_user(self, username_or_email, password):
         """
@@ -110,8 +117,8 @@ class KeycloakService:
             'attributes': {
                 'department': [profile.department.code] if profile.department else [],
             },
-            'iat': datetime.utcnow().timestamp(),
-            'exp': (datetime.utcnow() + timedelta(hours=1)).timestamp(),
+            'iat': datetime.datetime.utcnow().timestamp(),
+            'exp': (datetime.datetime.utcnow() + timedelta(hours=1)).timestamp(),
             'source': 'django_fallback',  # Marker that this came from Django, not Keycloak
         }
         token = jwt.encode(payload, settings.SECRET_KEY, algorithm='HS256')
@@ -122,6 +129,43 @@ class KeycloakService:
             'expires_in': 3600,
             'source': 'django_fallback'
         }
+
+    def generate_first_login_token(self, username):
+        now = datetime.datetime.now(datetime.timezone.utc)
+        payload = {
+            'username': username,
+            'purpose': 'first_login',
+            'iat': now.timestamp(),
+            'exp': (now + timedelta(minutes=90)).timestamp(),
+        }
+        token = jwt.encode(payload, settings.SECRET_KEY, algorithm='HS256')
+        return token
+
+    def verify_first_login_token(self, token):
+        try:
+            decoded = jwt.decode(token, settings.SECRET_KEY, algorithms=['HS256'], leeway=30)
+        except jwt.ExpiredSignatureError:
+            raise Exception('The password reset token has expired.')
+        except jwt.InvalidTokenError as exc:
+            raise Exception(f'Invalid password reset token: {exc}')
+
+        if decoded.get('purpose') != 'first_login':
+            raise Exception('Invalid password reset token.')
+
+        return decoded
+
+    def send_first_login_email(self, user, token):
+        reset_link = f'http://localhost:3000/reset-password?token={token}'
+        subject = 'Première connexion : réinitialisation de votre mot de passe'
+        message = (
+            f'Bonjour {user.first_name or user.last_name or user.username},\n\n'
+            'Nous avons détecté que c\'est votre première connexion. \n'
+            'Veuillez cliquer sur le lien suivant pour définir un nouveau mot de passe :\n\n'
+            f'{reset_link}\n\n'
+            'Ce lien expire dans 90 minutes. Si vous n\'avez pas demandé cette opération, ignorez ce message.'
+        )
+        email_from = settings.DEFAULT_FROM_EMAIL if hasattr(settings, 'DEFAULT_FROM_EMAIL') else 'no-reply@example.com'
+        send_mail(subject, message, email_from, [user.email], fail_silently=False)
 
     def get_user_profile(self, access_token):
         """
@@ -156,20 +200,47 @@ class KeycloakService:
             'department': profile.department.code if profile.department else None,
             'department_name': profile.department.name if profile.department else None,
             'theme_color': profile.department.theme_color if profile.department else '#1976d2',  # Default blue for ADMIN
+            'is_first_login': profile.is_first_login,
+            'date_naissance': profile.date_naissance.isoformat() if profile.date_naissance else None,
         }
 
     def get_keycloak_admin_token(self):
         """Get admin token for Keycloak admin API operations"""
-        token_url = f'{self.server_url}/realms/master/protocol/openid-connect/token'
-        payload = {
-            'grant_type': 'client_credentials',
-            'client_id': self.client_id,
-            'client_secret': self.client_secret,
-        }
-        response = requests.post(token_url, data=payload)
-        if response.status_code != 200:
-            raise Exception(f'Failed to get admin token: {response.status_code} {response.text}')
-        return response.json().get('access_token')
+        errors = []
+
+        # First attempt: service account / client credentials for the realm client
+        if self.client_id and self.client_secret:
+            token_url = f'{self.server_url}/realms/{self.realm}/protocol/openid-connect/token'
+            payload = {
+                'grant_type': 'client_credentials',
+                'client_id': self.client_id,
+                'client_secret': self.client_secret,
+            }
+            response = requests.post(token_url, data=payload)
+            if response.status_code == 200:
+                return response.json().get('access_token')
+            errors.append(f'Service account token failed: {response.status_code} {response.text}')
+
+        # Fallback: admin username/password via master realm
+        if self.admin_username and self.admin_password and self.admin_client_id:
+            token_url = f'{self.server_url}/realms/master/protocol/openid-connect/token'
+            payload = {
+                'grant_type': 'password',
+                'client_id': self.admin_client_id,
+                'username': self.admin_username,
+                'password': self.admin_password,
+            }
+
+            # Include client secret only when present for confidential clients
+            if self.admin_client_secret:
+                payload['client_secret'] = self.admin_client_secret
+
+            response = requests.post(token_url, data=payload)
+            if response.status_code == 200:
+                return response.json().get('access_token')
+            errors.append(f'Admin credentials token failed: {response.status_code} {response.text}')
+
+        raise Exception('Failed to obtain Keycloak admin token. ' + ' | '.join(errors))
 
     def create_user_in_keycloak(self, username, email, password, first_name='', last_name=''):
         """
