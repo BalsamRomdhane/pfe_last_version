@@ -7,6 +7,8 @@ import {
   Building,
   Settings,
   ShieldCheck,
+  FileText,
+  ClipboardCheck,
   X,
 } from 'lucide-react';
 
@@ -22,6 +24,29 @@ const Sidebar = ({ mobileOpen, onClose }) => {
           icon: <BarChart3 size={18} />,
           path: '/dashboard',
           roles: ['ADMIN', 'TEAMLEAD', 'EMPLOYEE'],
+        },
+        {
+          label: 'Documents',
+          icon: <FileText size={18} />,
+          path: '/documents',
+          roles: ['ADMIN', 'TEAMLEAD', 'EMPLOYEE'],
+        },
+      ],
+    },
+    {
+      title: 'WORKFLOW',
+      items: [
+        {
+          label: 'Normes',
+          icon: <ClipboardCheck size={18} />,
+          path: '/normes',
+          roles: ['ADMIN', 'TEAMLEAD'],
+        },
+        {
+          label: 'Validations',
+          icon: <Building size={18} />,
+          path: '/validations',
+          roles: ['ADMIN', 'TEAMLEAD'],
         },
       ],
     },

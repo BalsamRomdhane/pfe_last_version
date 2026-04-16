@@ -1,9 +1,12 @@
-from django.urls import path
-from .views import ProtectedView, AdminView, TeamLeadView, EmployeeView
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
+from .views import NormeViewSet, DocumentViewSet, ValidationViewSet
+
+router = DefaultRouter()
+router.register(r'normes', NormeViewSet, basename='norme')
+router.register(r'documents', DocumentViewSet, basename='document')
+router.register(r'validations', ValidationViewSet, basename='validation')
 
 urlpatterns = [
-    path('protected/', ProtectedView.as_view(), name='protected'),
-    path('admin/', AdminView.as_view(), name='admin'),
-    path('teamlead/', TeamLeadView.as_view(), name='teamlead'),
-    path('employee/', EmployeeView.as_view(), name='employee'),
+    path('', include(router.urls)),
 ]
