@@ -8,6 +8,9 @@ import Login from './components/Login';
 import Dashboard from './components/Dashboard.jsx';
 import Users from './components/Users';
 import Departments from './components/Departments';
+import Normes from './components/Normes';
+import Documents from './components/Documents';
+import Validations from './components/Validations';
 import System from './components/System';
 import ResetPassword from './components/ResetPassword';
 
@@ -73,7 +76,34 @@ function AppContent() {
               </ProtectedRoute>
             }
           />
-          
+
+          <Route
+            path="/documents"
+            element={
+              <ProtectedRoute>
+                <Documents />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/normes"
+            element={
+              <RoleProtectedRoute roles={['ADMIN', 'TEAMLEAD']}>
+                <Normes />
+              </RoleProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/validations"
+            element={
+              <RoleProtectedRoute roles={['ADMIN', 'TEAMLEAD', 'EMPLOYEE']}>
+                <Validations />
+              </RoleProtectedRoute>
+            }
+          />
+
           <Route
             path="/users"
             element={

@@ -20,6 +20,18 @@ class IsAdmin(KeycloakRolePermission):
 class IsTeamLead(KeycloakRolePermission):
     required_role = 'TEAMLEAD'
 
+class IsTeamLeadOrAdmin(BasePermission):
+    def has_permission(self, request, view):
+        user = request.user
+        if not getattr(user, 'is_authenticated', False):
+            return False
+
+        roles = getattr(user, 'roles', []) or []
+        if not isinstance(roles, list):
+            roles = [roles]
+        normalized_roles = [str(role).upper() for role in roles if role]
+        return 'ADMIN' in normalized_roles or 'TEAMLEAD' in normalized_roles
+
 class IsEmployee(KeycloakRolePermission):
     required_role = 'EMPLOYEE'
 

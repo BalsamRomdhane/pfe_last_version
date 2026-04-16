@@ -12,6 +12,9 @@ import {
   Sparkles,
   BarChart3,
   Bell,
+  FileText,
+  ClipboardCheck,
+  ClipboardList,
 } from 'lucide-react';
 
 const statCards = [
@@ -148,6 +151,27 @@ const Dashboard = () => {
 
   const headerActions = [
     {
+      title: 'Submit Document',
+      description: 'Upload compliance evidence for review',
+      icon: FileText,
+      link: '/documents',
+      roles: ['EMPLOYEE'],
+    },
+    {
+      title: 'Review Validations',
+      description: 'Approve or reject submitted documents',
+      icon: ClipboardCheck,
+      link: '/validations',
+      roles: ['ADMIN', 'TEAMLEAD'],
+    },
+    {
+      title: 'Manage Normes',
+      description: 'Define department compliance rules',
+      icon: ClipboardList,
+      link: '/normes',
+      roles: ['ADMIN', 'TEAMLEAD'],
+    },
+    {
       title: 'Manage Users',
       description: 'Create, edit and review user accounts',
       icon: ShieldCheck,
@@ -262,29 +286,31 @@ const Dashboard = () => {
           </aside>
         </section>
 
-        {user?.role === 'ADMIN' && (
+        {headerActions.filter((action) => action.roles.includes(user?.role)).length > 0 && (
           <section className="grid gap-6 xl:grid-cols-2">
-            {headerActions.map((action) => (
-              <button
-                key={action.title}
-                type="button"
-                onClick={() => navigate(action.link)}
-                className="group rounded-[1.5rem] border border-slate-200 bg-white p-6 text-left shadow-sm transition duration-200 hover:-translate-y-1 hover:shadow-xl"
-              >
-                <div className="flex items-center justify-between gap-4">
-                  <div>
-                    <p className="text-sm font-semibold text-slate-900">{action.title}</p>
-                    <p className="mt-2 text-sm text-slate-500">{action.description}</p>
+            {headerActions
+              .filter((action) => action.roles.includes(user?.role))
+              .map((action) => (
+                <button
+                  key={action.title}
+                  type="button"
+                  onClick={() => navigate(action.link)}
+                  className="group rounded-[1.5rem] border border-slate-200 bg-white p-6 text-left shadow-sm transition duration-200 hover:-translate-y-1 hover:shadow-xl"
+                >
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900">{action.title}</p>
+                      <p className="mt-2 text-sm text-slate-500">{action.description}</p>
+                    </div>
+                    <div className="flex h-12 w-12 items-center justify-center rounded-3xl bg-slate-100 text-slate-700">
+                      <action.icon size={24} />
+                    </div>
                   </div>
-                  <div className="flex h-12 w-12 items-center justify-center rounded-3xl bg-slate-100 text-slate-700">
-                    <action.icon size={24} />
+                  <div className="mt-6 inline-flex items-center gap-2 text-sm font-semibold text-sky-600">
+                    Open <ArrowRight size={16} className="transition-transform duration-200 group-hover:translate-x-1" />
                   </div>
-                </div>
-                <div className="mt-6 inline-flex items-center gap-2 text-sm font-semibold text-sky-600">
-                  Open <ArrowRight size={16} className="transition-transform duration-200 group-hover:translate-x-1" />
-                </div>
-              </button>
-            ))}
+                </button>
+              ))}
           </section>
         )}
       </div>
