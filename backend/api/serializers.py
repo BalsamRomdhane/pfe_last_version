@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Norme, Rule, Document, Validation
+from .models import Norme, Rule, Document, Validation, TrainingSample
 
 
 class RuleSerializer(serializers.ModelSerializer):
@@ -147,3 +147,10 @@ class ValidationSerializer(serializers.ModelSerializer):
         if 'evidence_file' in validated_data and validated_data['evidence_file'] is None:
             validated_data.pop('evidence_file')
         return super().update(instance, validated_data)
+
+
+class TrainingSampleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TrainingSample
+        fields = ['id', 'label', 'features', 'standard', 'created_at']
+        read_only_fields = ['label', 'features', 'standard', 'created_at']

@@ -13,6 +13,7 @@ import Documents from './components/Documents';
 import Validations from './components/Validations';
 import System from './components/System';
 import ResetPassword from './components/ResetPassword';
+import TrainingDataset from './pages/TrainingDataset';
 
 // Admin panel redirect component
 function AdminRedirect() {
@@ -128,6 +129,15 @@ function AppContent() {
               <ProtectedRoute>
                 <System />
               </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/training-dataset"
+            element={
+              <RoleProtectedRoute roles={['ADMIN']}>
+                <TrainingDataset />
+              </RoleProtectedRoute>
             }
           />
           
