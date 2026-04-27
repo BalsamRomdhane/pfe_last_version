@@ -6,13 +6,14 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
-from .models import Norme, Rule, Document, Validation
+from .models import Norme, Rule, Document, Validation, TrainingSample, create_training_sample
 from .serializers import (
     NormeSerializer,
     RuleSerializer,
     DocumentSerializer,
     DocumentDetailSerializer,
     ValidationSerializer,
+    TrainingSampleSerializer,
 )
 from authentication.permissions import IsAdmin, IsTeamLead, IsTeamLeadOrAdmin, IsEmployee
 
@@ -34,6 +35,8 @@ def recalculate_document_status(document):
     if document.status != new_status:
         document.status = new_status
         document.save(update_fields=['status'])
+        if new_status in [Document.Status.APPROVED, Document.Status.REJECTED]:
+            create_training_sample(document)
 
     return new_status
 
@@ -113,21 +116,8 @@ class DocumentViewSet(viewsets.ModelViewSet):
     def validations(self, request, pk=None):
         document = self.get_object()
         validations = document.validations.select_related('rule').all()
-        roles = [str(role).upper() for role in getattr(request.user, 'roles', []) or []]
-        if 'EMPLOYEE' in roles:
-            validations = validations.filter(is_valid=False)
         serializer = ValidationSerializer(validations, many=True, context={'request': request})
         return Response(serializer.data)
-
-    def retrieve(self, request, *args, **kwargs):
-        response = super().retrieve(request, *args, **kwargs)
-        roles = [str(role).upper() for role in getattr(request.user, 'roles', []) or []]
-        if 'EMPLOYEE' in roles and isinstance(response.data, dict):
-            response.data['validations'] = [
-                validation for validation in response.data.get('validations', [])
-                if validation.get('is_valid') is False
-            ]
-        return response
 
     @action(detail=True, methods=['patch'], url_path='status')
     def update_status(self, request, pk=None):
@@ -149,6 +139,8 @@ class DocumentViewSet(viewsets.ModelViewSet):
         if 'TEAMLEAD' in roles and not document.teamlead_username:
             document.teamlead_username = user.username
         document.save(update_fields=['status', 'teamlead_username'])
+        if document.status in [Document.Status.APPROVED, Document.Status.REJECTED]:
+            create_training_sample(document)
         return Response({'status': document.status})
 
 
@@ -270,3 +262,18 @@ class ValidationViewSet(viewsets.ModelViewSet):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class TrainingSampleViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = TrainingSample.objects.select_related('document__norme').all()
+    serializer_class = TrainingSampleSerializer
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    def get_queryset(self):
+        standard = self.request.query_params.get('standard')
+        qs = self.queryset
+
+        if standard:
+            qs = qs.filter(standard=standard)
+
+        return qs.order_by('-created_at')

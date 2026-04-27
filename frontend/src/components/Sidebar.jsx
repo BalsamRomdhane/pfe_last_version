@@ -9,6 +9,7 @@ import {
   ShieldCheck,
   FileText,
   ClipboardCheck,
+  Database,
   X,
 } from 'lucide-react';
 
@@ -47,6 +48,12 @@ const Sidebar = ({ mobileOpen, onClose }) => {
           icon: <Building size={18} />,
           path: '/validations',
           roles: ['ADMIN', 'TEAMLEAD'],
+        },
+        {
+          label: 'Dataset',
+          icon: <Database size={18} />,
+          path: '/training-dataset',
+          roles: ['ADMIN'],
         },
       ],
     },
