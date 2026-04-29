@@ -2,9 +2,11 @@ import json
 from django.db import transaction
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
+from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.views import APIView
 
 from .models import Norme, Rule, Document, Validation, TrainingSample, create_training_sample
 from .serializers import (
@@ -39,6 +41,129 @@ def recalculate_document_status(document):
             create_training_sample(document)
 
     return new_status
+
+
+RULE_KEYWORDS = {
+    'ISO9001': {
+        'Identification du document': ['reference', 'doc id', 'référence'],
+        'Version du document': ['version', 'revision', 'rev'],
+        'Approbation du document': ['approved', 'validé', 'signature'],
+        'Lisibilité et format': ['format', 'lisible'],
+        'Contrôle des modifications': ['modification', 'historique'],
+        'Accessibilité': ['accessible'],
+        'Protection du document': ['confidentiel', 'protection'],
+        'Archivage': ['archivage', 'archive'],
+        'Validité du contenu': ['valide', 'exact'],
+        'Signature ou validation officielle': ['signature', 'approuvé'],
+    },
+    'ISO27001': {},
+}
+
+
+def extract_text(file):
+    file_name = getattr(file, 'name', '').lower()
+    file.seek(0)
+
+    if file_name.endswith('.pdf'):
+        try:
+            import pdfplumber
+        except ImportError as exc:
+            raise ValidationError('pdfplumber is required to read PDF files.') from exc
+
+        text = ''
+        with pdfplumber.open(file) as pdf:
+            for page in pdf.pages:
+                text += page.extract_text() or ''
+        return text
+
+    if file_name.endswith('.docx'):
+        try:
+            from docx import Document as DocxDocument
+        except ImportError as exc:
+            raise ValidationError('python-docx is required to read DOCX files.') from exc
+
+        doc = DocxDocument(file)
+        return '\n'.join([p.text for p in doc.paragraphs])
+
+    raise ValidationError({'file': 'Unsupported file type. Only PDF and DOCX are supported.'})
+
+
+def split_text(text, chunk_size=300):
+    if not text:
+        return []
+
+    words = text.split()
+    return [' '.join(words[i:i + chunk_size]) for i in range(0, len(words), chunk_size)]
+
+
+def check_rule_with_evidence(chunks, keywords):
+    for chunk in chunks:
+        lower_chunk = chunk.lower()
+        for keyword in keywords:
+            keyword_lower = keyword.lower()
+            if keyword_lower in lower_chunk:
+                # Find the position of the keyword
+                start = lower_chunk.find(keyword_lower)
+                # Extract 100 characters around the keyword (50 before, 50 after)
+                evidence_start = max(0, start - 50)
+                evidence_end = min(len(chunk), start + len(keyword) + 50)
+                evidence = chunk[evidence_start:evidence_end].strip()
+                return {
+                    'status': 1,
+                    'keyword': keyword,
+                    'evidence': evidence,
+                }
+
+    return {
+        'status': 0,
+        'keyword': None,
+        'evidence': None,
+    }
+
+
+def extract_features(text, standard):
+    rules = RULE_KEYWORDS.get(standard, {})
+    chunks = split_text(text)
+    results = {}
+
+    for rule, keywords in rules.items():
+        results[rule] = check_rule_with_evidence(chunks, keywords)
+
+    return results
+
+
+def compute_score(features):
+    total = len(features)
+    valid = sum(1 for feature in features.values() if feature.get('status') == 1)
+    invalid = total - valid
+    compliance = int((valid / total) * 100) if total else 0
+    return compliance, valid, invalid
+
+
+class ExtractFeaturesView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request, *args, **kwargs):
+        document_file = request.FILES.get('file')
+        standard = request.data.get('standard')
+
+        if not document_file:
+            raise ValidationError({'file': 'This field is required.'})
+        if not standard:
+            raise ValidationError({'standard': 'This field is required.'})
+
+        text = extract_text(document_file)
+        features = extract_features(text, standard)
+        compliance, valid_rules, invalid_rules = compute_score(features)
+
+        return Response({
+            'standard': standard,
+            'features': features,
+            'valid_rules': valid_rules,
+            'invalid_rules': invalid_rules,
+            'compliance': compliance,
+        })
 
 
 class NormeViewSet(viewsets.ModelViewSet):
@@ -264,10 +389,15 @@ class ValidationViewSet(viewsets.ModelViewSet):
         )
 
 
-class TrainingSampleViewSet(viewsets.ReadOnlyModelViewSet):
+class TrainingSampleViewSet(viewsets.ModelViewSet):
     queryset = TrainingSample.objects.select_related('document__norme').all()
     serializer_class = TrainingSampleSerializer
-    permission_classes = [IsAuthenticated, IsAdmin]
+    permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        if self.action == 'destroy':
+            return [IsAuthenticated(), IsAdmin()]
+        return [IsAuthenticated(), IsAdmin()]
 
     def get_queryset(self):
         standard = self.request.query_params.get('standard')

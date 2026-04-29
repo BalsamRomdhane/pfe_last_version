@@ -14,6 +14,7 @@ import Validations from './components/Validations';
 import System from './components/System';
 import ResetPassword from './components/ResetPassword';
 import TrainingDataset from './pages/TrainingDataset';
+import DocumentAnalysis from './pages/DocumentAnalysis';
 
 // Admin panel redirect component
 function AdminRedirect() {
@@ -84,6 +85,15 @@ function AppContent() {
               <ProtectedRoute>
                 <Documents />
               </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/document-analysis"
+            element={
+              <RoleProtectedRoute roles={['ADMIN', 'TEAMLEAD']}>
+                <DocumentAnalysis />
+              </RoleProtectedRoute>
             }
           />
 
