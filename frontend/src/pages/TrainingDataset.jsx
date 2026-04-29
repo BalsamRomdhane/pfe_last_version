@@ -9,6 +9,7 @@ import {
   ShieldX,
   SlidersHorizontal,
   Target,
+  Trash2,
 } from "lucide-react";
 import Layout from "../components/Layout";
 import { UserContext } from "../context/UserContext";
@@ -90,6 +91,7 @@ export default function TrainingDataset() {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
 
   useEffect(() => {
     if (!user || user.role !== "ADMIN") {
@@ -113,6 +115,24 @@ export default function TrainingDataset() {
 
   const toggleRow = (id) => {
     setExpandedId((currentId) => (currentId === id ? null : id));
+  };
+
+  const handleDelete = async (id) => {
+    const confirmed = window.confirm("Confirmer la suppression ?");
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingId(id);
+    try {
+      await api.delete(`/training-dataset/${id}/`);
+      setData((current) => current.filter((item) => item.id !== id));
+    } catch (error) {
+      console.error("Erreur suppression :", error);
+      window.alert("Impossible de supprimer l'élément. Veuillez réessayer.");
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   const stats = {
@@ -303,14 +323,26 @@ export default function TrainingDataset() {
                           </td>
 
                           <td className="px-8 py-5 text-right">
-                            <button
-                              type="button"
-                              onClick={() => toggleRow(item.id)}
-                              className="inline-flex h-10 w-10 items-center justify-center rounded-full text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
-                              aria-label={isExpanded ? `Collapse sample ${item.id}` : `Expand sample ${item.id}`}
-                            >
-                              {isExpanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
-                            </button>
+                            <div className="inline-flex items-center gap-2 justify-end">
+                              <button
+                                type="button"
+                                onClick={() => handleDelete(item.id)}
+                                disabled={deletingId === item.id}
+                                className="inline-flex h-10 rounded-full border border-rose-200 bg-white px-3 text-rose-600 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                aria-label={`Delete sample ${item.id}`}
+                              >
+                                <Trash2 size={16} />
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => toggleRow(item.id)}
+                                className="inline-flex h-10 w-10 items-center justify-center rounded-full text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                                aria-label={isExpanded ? `Collapse sample ${item.id}` : `Expand sample ${item.id}`}
+                              >
+                                {isExpanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+                              </button>
+                            </div>
                           </td>
                         </tr>
 

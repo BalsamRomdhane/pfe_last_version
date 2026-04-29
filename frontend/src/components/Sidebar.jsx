@@ -32,6 +32,12 @@ const Sidebar = ({ mobileOpen, onClose }) => {
           path: '/documents',
           roles: ['ADMIN', 'TEAMLEAD', 'EMPLOYEE'],
         },
+        {
+          label: 'Document Analysis',
+          icon: <ClipboardCheck size={18} />,
+          path: '/document-analysis',
+          roles: ['ADMIN', 'TEAMLEAD'],
+        },
       ],
     },
     {
