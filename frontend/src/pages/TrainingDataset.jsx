@@ -92,6 +92,14 @@ export default function TrainingDataset() {
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
+  const [trainingLoading, setTrainingLoading] = useState(false);
+  const [trainingStatus, setTrainingStatus] = useState(null);
+  const [trainingAccuracy, setTrainingAccuracy] = useState(null);
+  const [trainingSamplesCount, setTrainingSamplesCount] = useState(null);
+  const [trainingError, setTrainingError] = useState(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalSamples, setTotalSamples] = useState(0);
+  const PAGE_SIZE = 10;
 
   useEffect(() => {
     if (!user || user.role !== "ADMIN") {
@@ -101,17 +109,20 @@ export default function TrainingDataset() {
 
     setLoading(true);
     api
-      .get(`/training-dataset/?standard=${standard}`)
+      .get(`/training-dataset/?standard=${standard}&page=${currentPage}`)
       .then((res) => {
-        setData(res.data.results || res.data || []);
+        const results = res.data.results || res.data || [];
+        setData(results);
         setExpandedId(null);
+        setTotalSamples(res.data.count ?? results.length);
       })
       .catch(() => {
         setData([]);
         setExpandedId(null);
+        setTotalSamples(0);
       })
       .finally(() => setLoading(false));
-  }, [standard, user, navigate]);
+  }, [standard, currentPage, user, navigate]);
 
   const toggleRow = (id) => {
     setExpandedId((currentId) => (currentId === id ? null : id));
@@ -135,11 +146,45 @@ export default function TrainingDataset() {
     }
   };
 
+  const handleTrain = async () => {
+    setTrainingLoading(true);
+    setTrainingError(null);
+    setTrainingStatus(null);
+
+    try {
+      const res = await api.post('/train-model/');
+      setTrainingStatus('success');
+      setTrainingAccuracy(res.data.accuracy);
+      setTrainingSamplesCount(res.data.samples);
+      window.alert(`Training terminé\nAccuracy: ${res.data.accuracy}`);
+    } catch (error) {
+      console.error('Erreur training :', error);
+      setTrainingStatus('error');
+      setTrainingError(error.response?.data?.error || 'Erreur lors du training');
+      window.alert('Erreur lors du training');
+    } finally {
+      setTrainingLoading(false);
+    }
+  };
+
   const stats = {
-    total: data.length,
+    total: totalSamples || data.length,
     approved: data.filter((item) => item.label === "approved").length,
     rejected: data.filter((item) => item.label === "rejected").length,
     avgScore: data.length ? Math.round(data.reduce((sum, item) => sum + getScore(item.features), 0) / data.length) : 0,
+  };
+
+  const totalPages = Math.max(1, Math.ceil((totalSamples || data.length) / PAGE_SIZE));
+  const canPrev = currentPage > 1;
+  const canNext = currentPage < totalPages;
+
+  const goToPage = (page) => {
+    setCurrentPage(page);
+  };
+
+  const handleStandardChange = (value) => {
+    setStandard(value);
+    setCurrentPage(1);
   };
 
   return (
@@ -227,20 +272,42 @@ export default function TrainingDataset() {
               <p className="mt-1 text-sm text-slate-500">Expand a row to inspect the exact feature vector stored for training.</p>
             </div>
 
-            <label className="flex items-center gap-3">
-              <span className="text-sm font-semibold text-slate-600">Standard</span>
-              <select
-                value={standard}
-                onChange={(e) => setStandard(e.target.value)}
-                className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-900 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-              >
-                {standards.map((item) => (
-                  <option key={item.value} value={item.value}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+              <label className="flex items-center gap-3">
+                <span className="text-sm font-semibold text-slate-600">Standard</span>
+                <select
+                  value={standard}
+                  onChange={(e) => handleStandardChange(e.target.value)}
+                  className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-900 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                >
+                  {standards.map((item) => (
+                    <option key={item.value} value={item.value}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={handleTrain}
+                  disabled={trainingLoading}
+                  className="inline-flex items-center justify-center rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {trainingLoading ? 'Training...' : '🚀 Lancer Training'}
+                </button>
+
+                {trainingStatus && (
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm text-slate-700">
+                    <p className="font-semibold">Statut : {trainingStatus === 'success' ? 'Success' : 'Erreur'}</p>
+                    {trainingAccuracy !== null && <p>Accuracy : {trainingAccuracy}</p>}
+                    {trainingSamplesCount !== null && <p>Samples : {trainingSamplesCount}</p>}
+                    {trainingError && <p className="text-rose-600">{trainingError}</p>}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
 
           {loading ? (
@@ -262,6 +329,28 @@ export default function TrainingDataset() {
             </div>
           ) : (
             <div className="overflow-x-auto">
+              <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm text-slate-500">Showing {data.length} of {totalSamples} samples</p>
+                <div className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                  <button
+                    type="button"
+                    onClick={() => canPrev && goToPage(currentPage - 1)}
+                    disabled={!canPrev}
+                    className="rounded-full border border-slate-200 bg-white px-3 py-2 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Prev
+                  </button>
+                  <span>Page {currentPage} / {totalPages}</span>
+                  <button
+                    type="button"
+                    onClick={() => canNext && goToPage(currentPage + 1)}
+                    disabled={!canNext}
+                    className="rounded-full border border-slate-200 bg-white px-3 py-2 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
               <table className="min-w-full">
                 <thead>
                   <tr className="border-b border-slate-200 bg-slate-50/80">
@@ -367,30 +456,66 @@ export default function TrainingDataset() {
                                   </div>
 
                                   <div className="grid gap-3 lg:grid-cols-2">
-                                    {Object.entries(item.features || {}).map(([rule, value]) => (
-                                      <div
-                                        key={rule}
-                                        className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-sm"
-                                      >
-                                        <div className="flex min-w-0 items-center gap-3">
-                                          <Circle
-                                            size={12}
-                                            className={value ? "fill-emerald-500 text-emerald-500" : "fill-red-500 text-red-500"}
-                                          />
-                                          <span className="text-sm font-medium text-slate-800">{rule}</span>
-                                        </div>
-
-                                        <span
-                                          className={`inline-flex items-center rounded-full px-4 py-1.5 text-sm font-medium ${
-                                            value
-                                              ? "bg-emerald-50 text-emerald-700"
-                                              : "bg-red-50 text-red-700"
-                                          }`}
+                                    {(item.rules_with_evidence || []).length > 0 ? (
+                                      item.rules_with_evidence.map((rule_item, idx) => (
+                                        <div
+                                          key={idx}
+                                          className="rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-sm"
                                         >
-                                          {value ? "Valid" : "Invalid"}
-                                        </span>
-                                      </div>
-                                    ))}
+                                          <div className="flex items-center justify-between mb-3">
+                                            <div className="flex min-w-0 items-center gap-3">
+                                              <Circle
+                                                size={12}
+                                                className={rule_item.feature_value ? "fill-emerald-500 text-emerald-500" : "fill-red-500 text-red-500"}
+                                              />
+                                              <span className="text-sm font-medium text-slate-800">{rule_item.rule}</span>
+                                            </div>
+
+                                            <span
+                                              className={`inline-flex items-center rounded-full px-4 py-1.5 text-sm font-medium ${
+                                                rule_item.feature_value
+                                                  ? "bg-emerald-50 text-emerald-700"
+                                                  : "bg-red-50 text-red-700"
+                                              }`}
+                                            >
+                                              {rule_item.feature_value ? "Valid" : "Invalid"}
+                                            </span>
+                                          </div>
+                                          
+                                          {rule_item.evidence && (
+                                            <div className="mt-3 rounded-lg bg-slate-50 border border-slate-200 p-3">
+                                              <p className="text-xs font-semibold text-slate-500 uppercase tracking-[0.1em] mb-1">Evidence</p>
+                                              <p className="text-sm text-slate-700 leading-relaxed">{rule_item.evidence}</p>
+                                            </div>
+                                          )}
+                                        </div>
+                                      ))
+                                    ) : (
+                                      Object.entries(item.features || {}).map(([rule, value]) => (
+                                        <div
+                                          key={rule}
+                                          className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-sm"
+                                        >
+                                          <div className="flex min-w-0 items-center gap-3">
+                                            <Circle
+                                              size={12}
+                                              className={value ? "fill-emerald-500 text-emerald-500" : "fill-red-500 text-red-500"}
+                                            />
+                                            <span className="text-sm font-medium text-slate-800">{rule}</span>
+                                          </div>
+
+                                          <span
+                                            className={`inline-flex items-center rounded-full px-4 py-1.5 text-sm font-medium ${
+                                              value
+                                                ? "bg-emerald-50 text-emerald-700"
+                                                : "bg-red-50 text-red-700"
+                                            }`}
+                                          >
+                                            {value ? "Valid" : "Invalid"}
+                                          </span>
+                                        </div>
+                                      ))
+                                    )}
                                   </div>
                                 </div>
                               </div>

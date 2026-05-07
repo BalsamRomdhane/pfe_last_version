@@ -1,7 +1,7 @@
 import React, { useContext } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { UserContext } from '../context/UserContext';
-import { Users, Building, Activity, Settings, BarChart3 } from 'lucide-react';
+import { Users, Building, Activity, Settings, BarChart3, Search } from 'lucide-react';
 
 const Sidebar = () => {
   const { user } = useContext(UserContext);
@@ -15,9 +15,21 @@ const Sidebar = () => {
       roles: ['ADMIN', 'TEAMLEAD', 'EMPLOYEE'],
     },
     {
+      label: 'Recherche sémantique',
+      icon: <Search size={20} />,
+      path: '/semantic-search',
+      roles: ['ADMIN', 'TEAMLEAD'],
+    },
+    {
       label: 'Users',
       icon: <Users size={20} />,
       path: '/users',
+      roles: ['ADMIN'],
+    },
+    {
+      label: 'ML Dashboard',
+      icon: <Activity size={20} />,
+      path: '/ml-dashboard',
       roles: ['ADMIN'],
     },
     {

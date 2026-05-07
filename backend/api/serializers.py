@@ -150,7 +150,56 @@ class ValidationSerializer(serializers.ModelSerializer):
 
 
 class TrainingSampleSerializer(serializers.ModelSerializer):
+    rules_with_evidence = serializers.SerializerMethodField(read_only=True)
+    score = serializers.SerializerMethodField(read_only=True)
+    rules_count = serializers.SerializerMethodField(read_only=True)
+
     class Meta:
         model = TrainingSample
-        fields = ['id', 'label', 'features', 'standard', 'created_at']
-        read_only_fields = ['label', 'features', 'standard', 'created_at']
+        fields = ['id', 'label', 'features', 'standard', 'created_at', 'rules_count', 'score', 'rules_with_evidence']
+        read_only_fields = ['label', 'features', 'standard', 'created_at', 'rules_count', 'score', 'rules_with_evidence']
+
+    def get_rules_with_evidence(self, obj):
+        """
+        Map features to rules with evidence from validations.
+        Returns a list of dicts with rule name, feature value, and evidence.
+        """
+        from .models import RULES_BY_STANDARD
+        
+        rules = RULES_BY_STANDARD.get(obj.standard, [])
+        features_list = obj.features if isinstance(obj.features, list) else list(obj.features.values())
+        
+        # Get validations for the associated document
+        validations = {}
+        if obj.document:
+            for validation in obj.document.validations.select_related('rule'):
+                validations[validation.rule.title] = validation.evidence_text
+        
+        # Pair rules with features and evidence
+        result = []
+        for idx, rule in enumerate(rules):
+            if idx < len(features_list):
+                result.append({
+                    'rule': rule,
+                    'feature_value': features_list[idx],
+                    'evidence': validations.get(rule, '')
+                })
+        
+        return result
+
+    def _feature_values(self, obj):
+        if isinstance(obj.features, dict):
+            return list(obj.features.values())
+        if isinstance(obj.features, list):
+            return obj.features
+        return []
+
+    def get_rules_count(self, obj):
+        return len(self._feature_values(obj))
+
+    def get_score(self, obj):
+        values = self._feature_values(obj)
+        if not values:
+            return 0
+        total = sum(int(bool(value)) for value in values)
+        return int((total / len(values)) * 100)

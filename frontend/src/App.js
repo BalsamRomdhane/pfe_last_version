@@ -14,7 +14,9 @@ import Validations from './components/Validations';
 import System from './components/System';
 import ResetPassword from './components/ResetPassword';
 import TrainingDataset from './pages/TrainingDataset';
+import MLDashboard from './pages/MLDashboard';
 import DocumentAnalysis from './pages/DocumentAnalysis';
+import SemanticSearch from './pages/SemanticSearch';
 
 // Admin panel redirect component
 function AdminRedirect() {
@@ -147,6 +149,24 @@ function AppContent() {
             element={
               <RoleProtectedRoute roles={['ADMIN']}>
                 <TrainingDataset />
+              </RoleProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/semantic-search"
+            element={
+              <RoleProtectedRoute roles={['ADMIN', 'TEAMLEAD']}>
+                <SemanticSearch />
+              </RoleProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/ml-dashboard"
+            element={
+              <RoleProtectedRoute roles={['ADMIN']}>
+                <MLDashboard />
               </RoleProtectedRoute>
             }
           />

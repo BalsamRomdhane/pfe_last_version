@@ -1,7 +1,7 @@
 import json
 from django.db import transaction
 from rest_framework import status, viewsets
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -17,7 +17,11 @@ from .serializers import (
     ValidationSerializer,
     TrainingSampleSerializer,
 )
+from .utils import extract_text, extract_features, compute_score
 from authentication.permissions import IsAdmin, IsTeamLead, IsTeamLeadOrAdmin, IsEmployee
+from ml.search import SemanticSearchEngine
+from ml.train import train_model
+from ml.train_models import train_all_models, load_trained_model, build_feature_vector
 
 
 def recalculate_document_status(document):
@@ -41,103 +45,6 @@ def recalculate_document_status(document):
             create_training_sample(document)
 
     return new_status
-
-
-RULE_KEYWORDS = {
-    'ISO9001': {
-        'Identification du document': ['reference', 'doc id', 'référence'],
-        'Version du document': ['version', 'revision', 'rev'],
-        'Approbation du document': ['approved', 'validé', 'signature'],
-        'Lisibilité et format': ['format', 'lisible'],
-        'Contrôle des modifications': ['modification', 'historique'],
-        'Accessibilité': ['accessible'],
-        'Protection du document': ['confidentiel', 'protection'],
-        'Archivage': ['archivage', 'archive'],
-        'Validité du contenu': ['valide', 'exact'],
-        'Signature ou validation officielle': ['signature', 'approuvé'],
-    },
-    'ISO27001': {},
-}
-
-
-def extract_text(file):
-    file_name = getattr(file, 'name', '').lower()
-    file.seek(0)
-
-    if file_name.endswith('.pdf'):
-        try:
-            import pdfplumber
-        except ImportError as exc:
-            raise ValidationError('pdfplumber is required to read PDF files.') from exc
-
-        text = ''
-        with pdfplumber.open(file) as pdf:
-            for page in pdf.pages:
-                text += page.extract_text() or ''
-        return text
-
-    if file_name.endswith('.docx'):
-        try:
-            from docx import Document as DocxDocument
-        except ImportError as exc:
-            raise ValidationError('python-docx is required to read DOCX files.') from exc
-
-        doc = DocxDocument(file)
-        return '\n'.join([p.text for p in doc.paragraphs])
-
-    raise ValidationError({'file': 'Unsupported file type. Only PDF and DOCX are supported.'})
-
-
-def split_text(text, chunk_size=300):
-    if not text:
-        return []
-
-    words = text.split()
-    return [' '.join(words[i:i + chunk_size]) for i in range(0, len(words), chunk_size)]
-
-
-def check_rule_with_evidence(chunks, keywords):
-    for chunk in chunks:
-        lower_chunk = chunk.lower()
-        for keyword in keywords:
-            keyword_lower = keyword.lower()
-            if keyword_lower in lower_chunk:
-                # Find the position of the keyword
-                start = lower_chunk.find(keyword_lower)
-                # Extract 100 characters around the keyword (50 before, 50 after)
-                evidence_start = max(0, start - 50)
-                evidence_end = min(len(chunk), start + len(keyword) + 50)
-                evidence = chunk[evidence_start:evidence_end].strip()
-                return {
-                    'status': 1,
-                    'keyword': keyword,
-                    'evidence': evidence,
-                }
-
-    return {
-        'status': 0,
-        'keyword': None,
-        'evidence': None,
-    }
-
-
-def extract_features(text, standard):
-    rules = RULE_KEYWORDS.get(standard, {})
-    chunks = split_text(text)
-    results = {}
-
-    for rule, keywords in rules.items():
-        results[rule] = check_rule_with_evidence(chunks, keywords)
-
-    return results
-
-
-def compute_score(features):
-    total = len(features)
-    valid = sum(1 for feature in features.values() if feature.get('status') == 1)
-    invalid = total - valid
-    compliance = int((valid / total) * 100) if total else 0
-    return compliance, valid, invalid
 
 
 class ExtractFeaturesView(APIView):
@@ -260,6 +167,10 @@ class DocumentViewSet(viewsets.ModelViewSet):
         if status_value not in [choice[0] for choice in Document.Status.choices]:
             raise ValidationError({'status': 'Invalid status value.'})
 
+        # If no validations exist and we're setting a final status, create default validations
+        if not document.validations.exists() and status_value in [Document.Status.APPROVED, Document.Status.REJECTED]:
+            self._create_default_validations(document, status_value, user.username)
+
         document.status = status_value
         if 'TEAMLEAD' in roles and not document.teamlead_username:
             document.teamlead_username = user.username
@@ -267,6 +178,34 @@ class DocumentViewSet(viewsets.ModelViewSet):
         if document.status in [Document.Status.APPROVED, Document.Status.REJECTED]:
             create_training_sample(document)
         return Response({'status': document.status})
+
+    def _create_default_validations(self, document, status_value, teamlead_username):
+        """Create default validations for all rules when document is validated directly."""
+        from .models import RULES_BY_STANDARD
+        
+        rules = document.norme.rules.all()
+        standard = document.norme.name
+        rule_titles = RULES_BY_STANDARD.get(standard, [])
+        
+        # Determine default validation based on final status
+        is_valid_default = (status_value == Document.Status.APPROVED)
+        
+        # Create evidence text based on status
+        if is_valid_default:
+            evidence_text = "Document validé directement par le teamlead - toutes les règles conformes."
+        else:
+            evidence_text = "Document rejeté directement par le teamlead - non-conformité détectée."
+        
+        for rule in rules:
+            Validation.objects.get_or_create(
+                document=document,
+                rule=rule,
+                defaults={
+                    'teamlead_username': teamlead_username,
+                    'evidence_text': evidence_text,
+                    'is_valid': is_valid_default,
+                }
+            )
 
 
 class ValidationViewSet(viewsets.ModelViewSet):
@@ -389,6 +328,60 @@ class ValidationViewSet(viewsets.ModelViewSet):
         )
 
 
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsAdmin])
+def train_model_api(request):
+    standard = request.data.get('standard')
+    result = train_model(standard=standard) if standard else train_model()
+
+    if 'error' in result:
+        return Response(result, status=status.HTTP_400_BAD_REQUEST)
+
+    return Response(
+        {
+            'message': 'Model trained successfully',
+            'accuracy': result['accuracy'],
+            'samples': result['samples'],
+            'standard': standard,
+        }
+    )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsAdmin])
+def train_models_api(request):
+    standard = request.data.get('standard')
+    result = train_all_models(standard=standard) if standard else train_all_models()
+    if 'error' in result:
+        return Response(result, status=status.HTTP_400_BAD_REQUEST)
+
+    return Response(result)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def semantic_search_api(request):
+    query = request.data.get('query') or request.data.get('q')
+    standard = request.data.get('standard')
+    top_k = request.data.get('top_k', 5)
+
+    if not query or not isinstance(query, str) or not query.strip():
+        raise ValidationError({'query': 'A non-empty query string is required.'})
+
+    try:
+        top_k = int(top_k)
+    except (TypeError, ValueError):
+        top_k = 5
+
+    engine = SemanticSearchEngine()
+    try:
+        result = engine.search(query=query.strip(), standard=standard, top_k=top_k)
+    except Exception as exc:
+        return Response({'error': str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    return Response(result)
+
+
 class TrainingSampleViewSet(viewsets.ModelViewSet):
     queryset = TrainingSample.objects.select_related('document__norme').all()
     serializer_class = TrainingSampleSerializer
@@ -407,3 +400,213 @@ class TrainingSampleViewSet(viewsets.ModelViewSet):
             qs = qs.filter(standard=standard)
 
         return qs.order_by('-created_at')
+
+
+# ==================== ML DASHBOARD ENDPOINTS ====================
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, IsAdmin])
+def norms_list_api(request):
+    """Get list of all norms for ML Dashboard"""
+    norms = Norme.objects.all().values('id', 'name', 'description')
+    return Response(list(norms))
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, IsAdmin])
+def dataset_stats_api(request):
+    """Get dataset statistics for a specific norm"""
+    norm_id = request.query_params.get('norm_id')
+    
+    if not norm_id:
+        return Response(
+            {'error': 'norm_id is required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        norme = Norme.objects.get(id=norm_id)
+    except Norme.DoesNotExist:
+        return Response(
+            {'error': 'Norm not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    
+    training_samples = TrainingSample.objects.filter(document__norme=norme)
+    if training_samples.count() == 0:
+        training_samples = TrainingSample.objects.filter(standard__iexact=norme.name)
+        if training_samples.count() == 0:
+            training_samples = TrainingSample.objects.filter(standard__iexact=norme.name.replace(' ', ''))
+
+    total_samples = training_samples.count()
+    valid_samples = training_samples.filter(label__iexact='approved').count()
+    invalid_samples = training_samples.filter(label__iexact='rejected').count()
+    rules_count = Rule.objects.filter(norme=norme).count()
+    
+    # Get recent samples for display
+    samples = training_samples.order_by('-created_at')
+    samples_serializer = TrainingSampleSerializer(samples, many=True)
+    
+    return Response({
+        'norm_id': norme.id,
+        'norm_name': norme.name,
+        'total_samples': total_samples,
+        'valid_samples': valid_samples,
+        'invalid_samples': invalid_samples,
+        'rules_count': rules_count,
+        'balance_ratio': valid_samples / max(total_samples, 1),
+        'samples': samples_serializer.data,
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsAdmin])
+def ml_train_api(request):
+    """Train ML models for a specific norm"""
+    norm_id = request.data.get('norm_id')
+    
+    if not norm_id:
+        return Response(
+            {'error': 'norm_id is required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        norme = Norme.objects.get(id=norm_id)
+    except Norme.DoesNotExist:
+        return Response(
+            {'error': 'Norm not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    
+    result = train_all_models(standard=norme.name, norme_id=norme.id)
+    
+    if 'error' in result:
+        return Response(result, status=status.HTTP_400_BAD_REQUEST)
+    
+    return Response(result)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, IsAdmin])
+def ml_models_api(request):
+    """Get trained ML models for a specific norm"""
+    norm_id = request.query_params.get('norm_id')
+    
+    if not norm_id:
+        return Response(
+            {'error': 'norm_id is required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        norme = Norme.objects.get(id=norm_id)
+    except Norme.DoesNotExist:
+        return Response(
+            {'error': 'Norm not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    
+    # Placeholder: This should fetch model metrics from ML module
+    # For now, return a sample structure
+    result = train_all_models(standard=norme.name, norme_id=norme.id)
+    
+    if 'error' in result:
+        return Response(result, status=status.HTTP_400_BAD_REQUEST)
+    
+    return Response(result)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsAdmin])
+def ml_test_document_api(request):
+    """Test a document with selected ML model"""
+    model_id = request.data.get('model_id')
+    norm_id = request.data.get('norm_id')
+    document_file = request.FILES.get('file')
+    
+    if not document_file:
+        return Response(
+            {'error': 'file is required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    if not model_id:
+        return Response(
+            {'error': 'model_id is required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    standard = 'ISO9001'
+    if norm_id:
+        try:
+            norme = Norme.objects.get(id=norm_id)
+            standard = norme.name
+        except Norme.DoesNotExist:
+            return Response(
+                {'error': 'Norm not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+    elif request.data.get('standard'):
+        standard = request.data.get('standard')
+
+    try:
+        text = extract_text(document_file)
+        raw_features = extract_features(text, standard)
+        if not raw_features:
+            return Response(
+                {'error': 'Could not extract features from document.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        model = load_trained_model(model_id, standard)
+        feature_values = build_feature_vector(raw_features, standard)
+        if not feature_values:
+            return Response(
+                {'error': 'Invalid document feature vector.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        prediction_value = model.predict([feature_values])[0]
+        prediction = 'APPROVED' if int(prediction_value) == 1 else 'REJECTED'
+
+        evidence_score = compute_score(raw_features)[0]
+        probability_score = None
+        if hasattr(model, 'predict_proba'):
+            proba = model.predict_proba([feature_values])[0]
+            probability_score = int(round(proba[1] * 100))
+
+        compliance_score = evidence_score
+        model_confidence = probability_score
+
+        rules_predictions = []
+        for rule, result in raw_features.items():
+            rules_predictions.append({
+                'rule': rule,
+                'prediction': 'VALID' if result.get('status') == 1 else 'INVALID',
+                'confidence': 90 if result.get('status') == 1 else 35,
+                'evidence': result.get('evidence') or 'Aucune évidence détectée',
+            })
+
+        response_data = {
+            'compliance_score': compliance_score,
+            'prediction': prediction,
+            'rules': rules_predictions,
+            'model_id': model_id,
+            'standard': standard,
+        }
+        if model_confidence is not None:
+            response_data['model_confidence'] = model_confidence
+
+        return Response(response_data)
+    except FileNotFoundError as exc:
+        return Response(
+            {'error': str(exc)},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    except Exception as exc:
+        return Response(
+            {'error': str(exc)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+

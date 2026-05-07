@@ -14,6 +14,18 @@ RULES_BY_STANDARD = {
         'Validit\u00e9 du contenu',
         'Signature ou validation officielle',
     ],
+    'ISO 9001': [
+        'Identification du document',
+        'Version du document',
+        'Approbation du document',
+        'Lisibilit\u00e9 et format',
+        'Contr\u00f4le des modifications',
+        'Accessibilit\u00e9',
+        'Protection du document',
+        'Archivage',
+        'Validit\u00e9 du contenu',
+        'Signature ou validation officielle',
+    ],
     'ISO27001': [],
 }
 

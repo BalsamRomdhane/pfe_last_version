@@ -61,6 +61,12 @@ const Sidebar = ({ mobileOpen, onClose }) => {
           path: '/training-dataset',
           roles: ['ADMIN'],
         },
+        {
+          label: 'ML Dashboard',
+          icon: <BarChart3 size={18} />,
+          path: '/ml-dashboard',
+          roles: ['ADMIN'],
+        },
       ],
     },
     {
