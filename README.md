@@ -1,0 +1,82 @@
+# Enterprise Management Platform
+
+A production-ready enterprise platform with advanced RBAC, department-based organization, and secure authentication using Django and Keycloak.
+
+## Architecture
+
+- **Backend**: Django + Django REST Framework
+- **Authentication**: Keycloak (OIDC)
+- **Frontend**: React with Material-UI
+- **Database**: PostgreSQL
+
+## Setup
+
+### Prerequisites
+
+- Python 3.8+
+- Node.js 14+
+- Docker and Docker Compose
+
+### 1. Start Infrastructure
+
+```bash
+cd docker
+docker-compose up -d
+```
+
+This starts PostgreSQL and Keycloak.
+
+### 2. Configure Keycloak
+
+1. Access Keycloak at http://localhost:8081
+2. Login with admin/admin
+3. Create realm: `enterprise-realm`
+4. Create client: `enterprise-client` (confidential, direct access grants enabled)
+5. Create roles: ADMIN, TEAMLEAD, EMPLOYEE
+6. Create users and assign roles/departments
+
+### 3. Backend Setup
+
+```bash
+cd backend
+python -m venv venv
+.\venv\Scripts\activate
+pip install -r requirements.txt
+copy .env.example .env
+# Then edit backend/.env and fill your real Keycloak / Mailtrap values
+python manage.py migrate
+python manage.py runserver
+```
+
+### 4. Frontend Setup
+
+```bash
+cd frontend
+npm install
+npm start
+```
+
+## Features
+
+- Role-based access control (ADMIN, TEAMLEAD, EMPLOYEE)
+- Department-based organization (DIGITAL, AERONAUTIQUE, AUTOMOBILE, QUALITE)
+- Dynamic UI theming
+- User management for admins
+- API testing panel
+- Secure authentication via Keycloak
+
+## API Endpoints
+
+- POST /api/auth/login/ - Login
+- POST /api/auth/users/ - Create user (ADMIN only)
+- GET /api/protected/ - Protected endpoint
+- GET /api/admin/ - Admin only
+- GET /api/teamlead/ - Teamlead only
+- GET /api/employee/ - Employee only
+
+## Usage
+
+1. Login with Keycloak credentials
+2. Access dashboard based on role and department
+3. Admins can create users
+
