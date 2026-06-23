@@ -58,8 +58,16 @@ api.interceptors.response.use(
           responseData = error.response.data;
         }
       }
+
+      const status = error.response.status;
+      const message = typeof responseData === 'string' ? responseData : '';
+      if ((status === 401 || status === 403) && /token|expired|invalid token/i.test(message)) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('userProfile');
+      }
+
       console.error('API Error:', {
-        status: error.response.status,
+        status,
         data: responseData,
         url: error.config?.url,
         method: error.config?.method,

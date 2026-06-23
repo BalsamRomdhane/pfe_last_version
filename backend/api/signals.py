@@ -12,7 +12,16 @@ from django.dispatch import receiver
 from django.db import transaction
 import logging
 
-from .models import Validation, TrainingSample, Document, RuleTrainingSample, aggregate_validation_metrics, extract_features, build_validation_feature_vector
+from .models import (
+    Validation,
+    TrainingSample,
+    Document,
+    RuleTrainingSample,
+    aggregate_validation_metrics,
+    extract_features,
+    build_validation_feature_vector,
+    create_document_training_sample,
+)
 from .utils import extract_document_text
 
 logger = logging.getLogger(__name__)
@@ -108,6 +117,12 @@ def create_training_sample_on_validation(sender, instance, created, update_field
             document=document,
             defaults=defaults
         )
+
+        # Keep the dedicated document-level dataset synchronized as well.
+        try:
+            create_document_training_sample(document)
+        except Exception as e:
+            logger.warning(f"Failed to refresh document training sample for document {document.id}: {e}")
 
         # Also create or update a RuleTrainingSample for this validation (one per document+rule)
         try:

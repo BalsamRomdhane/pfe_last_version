@@ -3,47 +3,43 @@ import { jwtDecode } from 'jwt-decode';
 
 export const UserContext = createContext();
 
+const getStoredProfile = () => {
+  try {
+    const rawProfile = localStorage.getItem('userProfile');
+    return rawProfile ? JSON.parse(rawProfile) : null;
+  } catch (error) {
+    localStorage.removeItem('userProfile');
+    console.warn('Invalid stored user profile removed:', error);
+    return null;
+  }
+};
+
+const buildUserFromToken = (tokenValue, profile) => {
+  const decoded = jwtDecode(tokenValue);
+
+  let role = profile?.role || null;
+  if (!role) {
+    role = decoded.realm_access?.roles?.[0] || null;
+    if (!role && decoded.resource_access) {
+      const client = Object.values(decoded.resource_access)[0];
+      role = client?.roles?.[0] || null;
+    }
+  }
+
+  const department = profile?.department || decoded.attributes?.department?.[0] || decoded.groups?.[0] || null;
+
+  return {
+    role,
+    department,
+    username: decoded.preferred_username || profile?.username || null,
+  };
+};
+
 export const UserProvider = ({ children }) => {
   const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [token, setToken] = useState(localStorage.getItem('token'));
-  const [userProfile, setUserProfile] = useState(localStorage.getItem('userProfile') ? JSON.parse(localStorage.getItem('userProfile')) : null);
-
-  useEffect(() => {
-    if (token) {
-      try {
-        const decoded = jwtDecode(token);
-        // Priority 1: Use role from userProfile (from Django), fallback to JWT
-        let role = userProfile?.role || null;
-        if (!role) {
-          role = decoded.realm_access?.roles?.[0] || null;
-          if (!role && decoded.resource_access) {
-            const client = Object.values(decoded.resource_access)[0];
-            role = client?.roles?.[0] || null;
-          }
-        }
-
-        const department = userProfile?.department || decoded.attributes?.department?.[0] || decoded.groups?.[0] || null;
-
-        setUser({
-          role,
-          department,
-          username: decoded.preferred_username,
-        });
-      } catch (error) {
-        console.error('Invalid token', error);
-        logout();
-      }
-    }
-  }, [token, userProfile]);
-
-  const login = (newToken, profile = null) => {
-    localStorage.setItem('token', newToken);
-    setToken(newToken);
-    if (profile) {
-      localStorage.setItem('userProfile', JSON.stringify(profile));
-      setUserProfile(profile);
-    }
-  };
+  const [userProfile, setUserProfile] = useState(getStoredProfile);
 
   const logout = () => {
     localStorage.removeItem('token');
@@ -51,10 +47,74 @@ export const UserProvider = ({ children }) => {
     setToken(null);
     setUser(null);
     setUserProfile(null);
+    setLoading(false);
+  };
+
+  const isTokenExpired = (candidateToken) => {
+    try {
+      const decoded = jwtDecode(candidateToken);
+      if (!decoded.exp) return false;
+      return decoded.exp * 1000 <= Date.now();
+    } catch {
+      return true;
+    }
+  };
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const initializeUser = () => {
+      if (!token || isTokenExpired(token)) {
+        if (isMounted) {
+          logout();
+        }
+        return;
+      }
+
+      try {
+        const decoded = jwtDecode(token);
+        const nextUser = buildUserFromToken(token, userProfile);
+
+        if (isMounted) {
+          setUser(nextUser);
+        }
+      } catch (error) {
+        console.error('Invalid token', error);
+        if (isMounted) {
+          logout();
+        }
+      } finally {
+        if (isMounted) {
+          setLoading(false);
+        }
+      }
+    };
+
+    setLoading(true);
+    initializeUser();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [token, userProfile]);
+
+  const login = (newToken, profile = null) => {
+    localStorage.setItem('token', newToken);
+    setToken(newToken);
+
+    if (profile) {
+      localStorage.setItem('userProfile', JSON.stringify(profile));
+      setUserProfile(profile);
+      setUser(buildUserFromToken(newToken, profile));
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
   };
 
   return (
-    <UserContext.Provider value={{ user, userProfile, token, login, logout }}>
+    <UserContext.Provider value={{ user, userProfile, token, loading, login, logout }}>
       {children}
     </UserContext.Provider>
   );

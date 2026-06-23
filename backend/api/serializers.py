@@ -246,6 +246,9 @@ class TrainingSampleSerializer(serializers.ModelSerializer):
     """
     rules_with_evidence = serializers.SerializerMethodField(read_only=True)
     features_count = serializers.SerializerMethodField(read_only=True)
+    rules_count = serializers.SerializerMethodField(read_only=True)
+    vector_length = serializers.SerializerMethodField(read_only=True)
+    score = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = TrainingSample
@@ -264,12 +267,38 @@ class TrainingSampleSerializer(serializers.ModelSerializer):
             'approved',
             'created_at',
             'rules_with_evidence',
+            'score',
             # DIRECT MODEL FIELDS - always kept synchronized by signal handler
             'total_rules',
             'valid_rules_count',
             'invalid_rules_count',
             'rule_results_json',
             'features_count',
+            'rules_count',
+            'vector_length',
+            'compliance_score',
+            'approved_rules',
+            'rejected_rules',
+        ]
+        read_only_fields = [
+            'document',
+            'norm_id',
+            'label',
+            'features',
+            'standard',
+            'confidence_score',
+            'teamlead_decision',
+            'approved',
+            'created_at',
+            'rules_with_evidence',
+            'score',
+            'total_rules',
+            'valid_rules_count',
+            'invalid_rules_count',
+            'rule_results_json',
+            'features_count',
+            'rules_count',
+            'vector_length',
             'compliance_score',
             'approved_rules',
             'rejected_rules',
@@ -301,6 +330,30 @@ class TrainingSampleSerializer(serializers.ModelSerializer):
         if isinstance(obj.features, list):
             return obj.features
         return []
+
+    def get_rules_count(self, obj):
+        if getattr(obj, 'total_rules', None) is not None:
+            return obj.total_rules
+        if isinstance(obj.features, dict):
+            return len(obj.features)
+        return 0
+
+    def get_vector_length(self, obj):
+        if isinstance(obj.feature_vector, list):
+            return len(obj.feature_vector)
+        if isinstance(obj.feature_vector, dict):
+            feature_list = obj.feature_vector.get('feature_list') if isinstance(obj.feature_vector.get('feature_list'), list) else None
+            if feature_list is not None:
+                return len(feature_list)
+            return len(obj.feature_vector)
+        return 0
+
+    def get_score(self, obj):
+        if getattr(obj, 'compliance_score', None) is not None:
+            return float(obj.compliance_score or 0.0)
+        if getattr(obj, 'confidence_score', None) is not None:
+            return float(obj.confidence_score or 0.0) * 100.0
+        return 0.0
 
     def _validation_metrics(self, obj):
         """

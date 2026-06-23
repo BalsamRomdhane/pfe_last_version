@@ -10,7 +10,7 @@ import pickle
 try:
     import faiss
     FAISS_AVAILABLE = True
-except ImportError:
+except (ImportError, OSError, Exception):
     FAISS_AVAILABLE = False
 
 SENTENCE_TRANSFORMERS_AVAILABLE = False
@@ -21,18 +21,42 @@ from api.utils import RULE_KEYWORDS, extract_document_text, normalize_text
 
 EMBEDDING_MODEL_NAME = 'all-MiniLM-L6-v2'
 
+# ── Singleton cache — avoids reloading 80MB model on every API request ──────
+_MODEL_CACHE: dict = {}
+
+
+def _get_sentence_transformer(model_name: str = EMBEDDING_MODEL_NAME):
+    """
+    Return a cached SentenceTransformer instance.
+    The model is loaded once per process and reused across all requests,
+    eliminating the ~2-3s cold-start penalty on every semantic search call.
+    """
+    global SENTENCE_TRANSFORMERS_AVAILABLE, SentenceTransformer, _MODEL_CACHE
+
+    if model_name in _MODEL_CACHE:
+        return _MODEL_CACHE[model_name]
+
+    if not SENTENCE_TRANSFORMERS_AVAILABLE:
+        try:
+            from sentence_transformers import SentenceTransformer as ST
+            SentenceTransformer = ST
+            SENTENCE_TRANSFORMERS_AVAILABLE = True
+        except (ImportError, OSError, Exception):
+            raise ImportError(
+                "sentence-transformers is not available. "
+                "Install it with: pip install sentence-transformers"
+            )
+
+    model = SentenceTransformer(model_name)
+    _MODEL_CACHE[model_name] = model
+    return model
+
 
 class SemanticSearchEngine:
     def __init__(self, model_name=EMBEDDING_MODEL_NAME):
-        global SENTENCE_TRANSFORMERS_AVAILABLE, SentenceTransformer
         self.model_name = model_name
-        if not SENTENCE_TRANSFORMERS_AVAILABLE:
-            try:
-                from sentence_transformers import SentenceTransformer
-                SENTENCE_TRANSFORMERS_AVAILABLE = True
-            except ImportError:
-                raise ImportError("sentence-transformers is not available. Please install it with: pip install sentence-transformers")
-        self.model = SentenceTransformer(model_name)
+        # Use cached model — no reload on every instantiation
+        self.model = _get_sentence_transformer(model_name)
 
     def _build_embedding_matrix(self, documents):
         texts = [normalize_text(value['text']) for value in documents]
@@ -211,8 +235,7 @@ def build_and_persist_evidence_index(standard=None, norme_id=None, model_name=EM
     used_model = None
     if SENTENCE_TRANSFORMERS_AVAILABLE:
         try:
-            from sentence_transformers import SentenceTransformer
-            model = SentenceTransformer(model_name)
+            model = _get_sentence_transformer(model_name)  # use cached singleton
             used_model = model_name
             vectors = model.encode(texts, convert_to_numpy=True, normalize_embeddings=True)
         except Exception:
@@ -363,8 +386,7 @@ def embed_query_vector(text, model_name=EMBEDDING_MODEL_NAME, vectorizer=None):
 
     if SENTENCE_TRANSFORMERS_AVAILABLE:
         try:
-            from sentence_transformers import SentenceTransformer
-            model = SentenceTransformer(model_name)
+            model = _get_sentence_transformer(model_name)  # use cached singleton
             vec = model.encode([normalize_text(text)], convert_to_numpy=True, normalize_embeddings=True)
             return np.asarray(vec, dtype=np.float32)
         except Exception:

@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 
 from pathlib import Path
 import os
+from django.core.exceptions import ImproperlyConfigured
 
 try:
     from corsheaders.defaults import default_headers
@@ -65,7 +66,27 @@ INSTALLED_APPS = [
     'authentication',
     'rbac',
     'api',
+    'compliance',
+    'notifications',
 ]
+
+# ── Django Channels (WebSockets — no Redis needed in dev) ─────────────────────
+try:
+    import channels  # noqa: F401
+    INSTALLED_APPS += ['channels']
+    ASGI_APPLICATION = 'enterprise_platform.asgi.application'
+    _redis_url = os.getenv('REDIS_URL', '')
+    if _redis_url:
+        try:
+            import channels_redis  # noqa: F401
+            CHANNEL_LAYERS = {'default': {'BACKEND': 'channels_redis.core.RedisChannelLayer',
+                                          'CONFIG': {'hosts': [_redis_url]}}}
+        except ImportError:
+            CHANNEL_LAYERS = {'default': {'BACKEND': 'channels.layers.InMemoryChannelLayer'}}
+    else:
+        CHANNEL_LAYERS = {'default': {'BACKEND': 'channels.layers.InMemoryChannelLayer'}}
+except ImportError:
+    pass
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -98,77 +119,73 @@ TEMPLATES = [
 WSGI_APPLICATION = 'enterprise_platform.wsgi.application'
 
 
-# Database
-# https://docs.djangoproject.com/en/5.2/ref/settings/#databases
+# ─────────────────────────────────────────────────────────────────────────────
+# Database — PostgreSQL ONLY
+# This project requires PostgreSQL in all environments.
+# No fallback to other database backends.
+# Configure via DATABASE_URL or individual DB_* environment variables.
+# ─────────────────────────────────────────────────────────────────────────────
 
-# Database configuration: prefer DATABASE_URL (Postgres) otherwise fallback to SQLite
 DATABASE_URL = os.getenv('DATABASE_URL')
+
 if DATABASE_URL and dj_database_url:
+    # Parse full DATABASE_URL (e.g. postgres://user:pass@host:port/dbname)
     DATABASES = {
-        'default': dj_database_url.parse(DATABASE_URL, conn_max_age=int(os.getenv('CONN_MAX_AGE', 600)))
+        'default': dj_database_url.parse(
+            DATABASE_URL,
+            conn_max_age=int(os.getenv('CONN_MAX_AGE', 600)),
+            engine='django.db.backends.postgresql',
+        )
     }
 else:
+    # Build from individual DB_* variables — PostgreSQL required
+    _db_name = os.getenv('DB_NAME')
+    _db_user = os.getenv('DB_USER')
+    _db_password = os.getenv('DB_PASSWORD', '')
+    _db_host = os.getenv('DB_HOST', 'localhost')
+    _db_port = os.getenv('DB_PORT', '5432')
+
+    if not _db_name or not _db_user:
+        raise ImproperlyConfigured(
+            "PostgreSQL is required. Set DATABASE_URL or DB_NAME + DB_USER in your .env file."
+        )
+
     DATABASES = {
         'default': {
-            'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'db.sqlite3',
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': _db_name,
+            'USER': _db_user,
+            'PASSWORD': _db_password,
+            'HOST': _db_host,
+            'PORT': _db_port,
+            'CONN_MAX_AGE': int(os.getenv('CONN_MAX_AGE', 600)),
+            'OPTIONS': {
+                'connect_timeout': 10,
+            },
         }
     }
 
-# Development helper: optionally use the workspace root sqlite DB instead of backend/db.sqlite3
-if os.getenv('USE_TOPLEVEL_DB', '0') == '1':
-    try:
-        TOP_DB = BASE_DIR.parent / 'db.sqlite3'
-        DATABASES['default']['NAME'] = TOP_DB
-    except Exception:
-        pass
-
-# Auto-detect populated DB: if backend DB has no training rows but top-level DB does,
-# switch automatically to the top-level DB for local development convenience.
-try:
-    import sqlite3
-    from pathlib import Path
-
-    def _count_table_rows(db_path, table_name):
-        try:
-            if not db_path or not Path(db_path).exists():
-                return None
-            conn = sqlite3.connect(str(db_path))
-            cur = conn.cursor()
-            cur.execute(f"SELECT count(*) FROM {table_name} LIMIT 1")
-            r = cur.fetchone()
-            conn.close()
-            return int(r[0]) if r and r[0] is not None else 0
-        except Exception:
-            return None
-
-    # Only attempt auto-switch in DEBUG/dev environments
-    if DEBUG:
-        curr_name = DATABASES.get('default', {}).get('NAME')
-        try:
-            curr_db_path = Path(curr_name)
-        except Exception:
-            curr_db_path = None
-
-        top_db_path = BASE_DIR.parent / 'db.sqlite3'
-
-        curr_count = _count_table_rows(curr_db_path, 'api_trainingsample') if curr_db_path else None
-        top_count = _count_table_rows(top_db_path, 'api_trainingsample') if top_db_path.exists() else None
-
-        if (curr_count is not None and curr_count == 0) and (top_count is not None and top_count > 0):
-            DATABASES['default']['NAME'] = top_db_path
-            # expose an env-like variable for processes to detect the switch
-            os.environ['SWAPPED_TO_TOPLEVEL_DB'] = '1'
-except Exception:
-    pass
+# Enforce PostgreSQL engine — fail fast if misconfigured
+_engine = DATABASES.get('default', {}).get('ENGINE', '')
+if 'postgresql' not in _engine and 'psycopg' not in _engine:
+    raise ImproperlyConfigured(
+        f"Invalid database ENGINE '{_engine}'. "
+        "This project requires django.db.backends.postgresql."
+    )
 
 # CORS settings
-CORS_ALLOWED_ORIGINS = [
+DEFAULT_CORS_ORIGINS = [
     'http://localhost:3000',
     'http://localhost:3001',
+    'http://localhost:3002',
     'http://127.0.0.1:3000',
     'http://127.0.0.1:3001',
+    'http://127.0.0.1:3002',
 ]
+CORS_ALLOWED_ORIGINS = os.getenv(
+    'CORS_ALLOWED_ORIGINS',
+    ','.join(DEFAULT_CORS_ORIGINS)
+).split(',')
 
 CORS_ALLOW_CREDENTIALS = True
 CORS_EXPOSE_HEADERS = ['Content-Type', 'X-CSRFToken']
@@ -178,12 +195,18 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
 ]
 
 # CSRF settings for API
-CSRF_TRUSTED_ORIGINS = [
+DEFAULT_CSRF_ORIGINS = [
     'http://localhost:3000',
     'http://localhost:3001',
+    'http://localhost:3002',
     'http://127.0.0.1:3000',
     'http://127.0.0.1:3001',
+    'http://127.0.0.1:3002',
 ]
+CSRF_TRUSTED_ORIGINS = os.getenv(
+    'CSRF_TRUSTED_ORIGINS',
+    ','.join(DEFAULT_CSRF_ORIGINS)
+).split(',')
 CSRF_COOKIE_HTTPONLY = False  # Allow JavaScript to read CSRF token
 CSRF_HEADER_NAME = 'HTTP_X_CSRFTOKEN'
 

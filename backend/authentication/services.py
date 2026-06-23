@@ -8,7 +8,47 @@ from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
 from django.core.mail import send_mail
 from django.utils import timezone
+from jwt import PyJWKClient
 from rbac.models import UserProfile
+
+
+def _decode_verified_token(token):
+    """Validate JWTs using the local secret for fallback tokens or the realm JWKS for Keycloak tokens."""
+    try:
+        header = jwt.get_unverified_header(token)
+        if header.get('alg') == 'none':
+            raise Exception('Token algorithm is not allowed.')
+    except Exception:
+        raise Exception('Invalid token format.')
+
+    try:
+        return jwt.decode(
+            token,
+            settings.SECRET_KEY,
+            algorithms=['HS256'],
+            options={'verify_exp': True},
+        )
+    except jwt.ExpiredSignatureError:
+        raise Exception('Token has expired. Please log in again.')
+    except jwt.InvalidTokenError:
+        pass
+
+    jwks_url = (
+        f"{settings.KEYCLOAK_SERVER_URL.rstrip('/')}/realms/"
+        f"{settings.KEYCLOAK_REALM}/protocol/openid-connect/certs"
+    )
+    try:
+        signing_key = PyJWKClient(jwks_url).get_signing_key_from_jwt(token)
+        return jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=['RS256'],
+            options={'verify_exp': True},
+        )
+    except jwt.ExpiredSignatureError:
+        raise Exception('Token has expired. Please log in again.')
+    except Exception as exc:
+        raise Exception(f'Invalid token: {exc}')
 
 class KeycloakService:
     """
@@ -110,6 +150,9 @@ class KeycloakService:
 
         # Create a mock JWT token for Django-authenticated user
         # This will be decoded by KeycloakAuthentication as if it came from Keycloak
+        # FIX: use time.time() — datetime.utcnow().timestamp() is off by UTC offset (1h on UTC+1)
+        import time as _time
+        _now = int(_time.time())
         payload = {
             'preferred_username': username,
             'sub': username,
@@ -117,26 +160,27 @@ class KeycloakService:
             'attributes': {
                 'department': [profile.department.code] if profile.department else [],
             },
-            'iat': datetime.datetime.utcnow().timestamp(),
-            'exp': (datetime.datetime.utcnow() + timedelta(hours=1)).timestamp(),
+            'iat': _now,
+            'exp': _now + 3600,  # 1 hour as plain Unix timestamp
             'source': 'django_fallback',  # Marker that this came from Django, not Keycloak
         }
         token = jwt.encode(payload, settings.SECRET_KEY, algorithm='HS256')
-        
+
         return {
             'access_token': token,
             'token_type': 'Bearer',
             'expires_in': 3600,
-            'source': 'django_fallback'
+            'source': 'django_fallback',
         }
 
     def generate_first_login_token(self, username):
-        now = datetime.datetime.now(datetime.timezone.utc)
+        import time as _time
+        _now = int(_time.time())
         payload = {
             'username': username,
             'purpose': 'first_login',
-            'iat': now.timestamp(),
-            'exp': (now + timedelta(minutes=90)).timestamp(),
+            'iat': _now,
+            'exp': _now + 5400,  # 90 minutes
         }
         token = jwt.encode(payload, settings.SECRET_KEY, algorithm='HS256')
         return token
@@ -174,8 +218,7 @@ class KeycloakService:
         Returns combined profile with role and department data.
         """
         try:
-            # Decode JWT (no signature verification in development)
-            decoded = jwt.decode(access_token, options={"verify_signature": False})
+            decoded = _decode_verified_token(access_token)
             username = decoded.get('preferred_username') or decoded.get('sub')
         except Exception as e:
             raise Exception(f'Failed to decode JWT: {str(e)}')

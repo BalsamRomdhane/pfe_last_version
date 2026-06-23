@@ -49,6 +49,8 @@ const normalizeModels = (data) => {
       id: item.id || name,
       name,
       algorithm: name,
+      cross_validation: item.cross_validation || item.cv_metrics || null,
+      feature_importance: Array.isArray(item.feature_importance) ? item.feature_importance : [],
     };
   };
 
@@ -97,6 +99,7 @@ export default function MLDashboard() {
   const [datasetType, setDatasetType] = useState('classification');
   const [datasetStats, setDatasetStats] = useState(null);
   const [datasetSamples, setDatasetSamples] = useState([]);
+  const [diagnostics, setDiagnostics] = useState(null);
   const [datasetPage, setDatasetPage] = useState(1);
   const [expandedSamples, setExpandedSamples] = useState(new Set());
   const [models, setModels] = useState([]);
@@ -236,13 +239,24 @@ export default function MLDashboard() {
     }
   }, [datasetType]);
 
-  // Load dataset stats and models when norm or dataset type changes
+  const fetchDiagnostics = useCallback(async (normId) => {
+    try {
+      const res = await api.get(`/ml/diagnostics/?norm_id=${normId}`);
+      setDiagnostics(res.data);
+    } catch (err) {
+      console.error(err);
+      setDiagnostics(null);
+    }
+  }, []);
+
+  // Load dataset stats, diagnostics, and models when norm or dataset type changes
   useEffect(() => {
     if (selectedNormId) {
       fetchDatasetStats(selectedNormId);
+      fetchDiagnostics(selectedNormId);
       fetchModels(selectedNormId);
     }
-  }, [selectedNormId, fetchDatasetStats, fetchModels]);
+  }, [selectedNormId, fetchDatasetStats, fetchDiagnostics, fetchModels]);
 
   const handleTrain = async () => {
     if (!selectedNormId) {
@@ -352,6 +366,8 @@ export default function MLDashboard() {
   };
 
   const activeModel = isModelTrained(selectedModel) ? selectedModel : bestModel;
+  const recommendedSource = diagnostics?.recommended_source;
+  const recommendedSourceLabel = recommendedSource === 'document' ? 'Document-level pipeline' : 'Evidence retrieval pipeline';
 
   return (
     <Layout>
@@ -365,6 +381,11 @@ export default function MLDashboard() {
                 <p className="mt-4 max-w-2xl text-sm leading-7 text-slate-300/90">
                   {DATASET_DESCRIPTIONS[datasetType]} Select a standard, train the pipeline, compare available models, and validate documents.
                 </p>
+                {diagnostics && (
+                  <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-sky-500/30 bg-sky-500/10 px-3 py-1.5 text-xs font-medium text-sky-100">
+                    Recommended source: {recommendedSourceLabel}
+                  </div>
+                )}
               </div>
 
               <div className="grid gap-3 sm:grid-cols-[1fr_auto] lg:grid-cols-[auto_auto] xl:grid-cols-[auto_auto_auto]">
@@ -556,6 +577,125 @@ export default function MLDashboard() {
           </div>
         </section>
 
+        {diagnostics && (
+          <section className="rounded-[2rem] border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-100 px-6 py-5 sm:px-8">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">Model Diagnostics</h2>
+                <p className="mt-1 text-sm text-slate-500">Dataset quality, leakage risk, and model interpretation indicators.</p>
+              </div>
+            </div>
+            <div className="space-y-6 px-6 py-8 sm:px-8">
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Dataset completeness</p>
+                  <p className="mt-2 text-2xl font-semibold text-slate-900">{formatPercent(diagnostics.dataset_completeness)}</p>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Duplicate rate</p>
+                  <p className="mt-2 text-2xl font-semibold text-slate-900">{formatPercent(diagnostics.duplicate_rate)}</p>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Class balance</p>
+                  <p className="mt-2 text-2xl font-semibold text-slate-900">{formatPercent(diagnostics.class_balance)}</p>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Leakage risk</p>
+                  <p className="mt-2 text-2xl font-semibold text-slate-900">{formatPercent(diagnostics.leakage_risk)}</p>
+                </div>
+              </div>
+
+              <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+                <div className="rounded-2xl border border-slate-200 bg-white p-5">
+                  <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-500">Selected model metrics</h3>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <div className="rounded-2xl bg-slate-50 p-4">
+                      <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Accuracy</p>
+                      <p className="mt-2 text-xl font-semibold text-slate-900">{formatPercent(selectedModel?.accuracy || 0)}</p>
+                    </div>
+                    <div className="rounded-2xl bg-slate-50 p-4">
+                      <p className="text-xs uppercase tracking-[0.2em] text-slate-500">F1 score</p>
+                      <p className="mt-2 text-xl font-semibold text-slate-900">{formatPercent(selectedModel?.f1_score || 0)}</p>
+                    </div>
+                    <div className="rounded-2xl bg-slate-50 p-4">
+                      <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Precision</p>
+                      <p className="mt-2 text-xl font-semibold text-slate-900">{formatPercent(selectedModel?.precision || 0)}</p>
+                    </div>
+                    <div className="rounded-2xl bg-slate-50 p-4">
+                      <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Recall</p>
+                      <p className="mt-2 text-xl font-semibold text-slate-900">{formatPercent(selectedModel?.recall || 0)}</p>
+                    </div>
+                  </div>
+                  {selectedModel?.cross_validation && (
+                    <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                      <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Cross-validation (grouped)</p>
+                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                        <p className="text-sm text-slate-700">Accuracy: {formatPercent(selectedModel.cross_validation.mean_accuracy)} ± {formatPercent(selectedModel.cross_validation.std_accuracy)}</p>
+                        <p className="text-sm text-slate-700">Precision: {formatPercent(selectedModel.cross_validation.mean_precision)} ± {formatPercent(selectedModel.cross_validation.std_precision)}</p>
+                        <p className="text-sm text-slate-700">Recall: {formatPercent(selectedModel.cross_validation.mean_recall)} ± {formatPercent(selectedModel.cross_validation.std_recall)}</p>
+                        <p className="text-sm text-slate-700">F1: {formatPercent(selectedModel.cross_validation.mean_f1)} ± {formatPercent(selectedModel.cross_validation.std_f1)}</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-white p-5">
+                  <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-500">Confusion matrix</h3>
+                  <div className="mt-4 flex items-center gap-3">
+                    {(selectedModel?.confusion_matrix || []).map((row, i) => (
+                      <div key={i} className="flex flex-col gap-1">
+                        {row.map((value, j) => (
+                          <span key={`${i}-${j}`} className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-sm font-semibold text-slate-900">
+                            {value}
+                          </span>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid gap-6 xl:grid-cols-[1fr_0.9fr]">
+                <div className="rounded-2xl border border-slate-200 bg-white p-5">
+                  <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-500">Top feature importance</h3>
+                  <div className="mt-4 space-y-3">
+                    {(selectedModel?.feature_importance || []).map((item) => (
+                      <div key={item.feature} className="space-y-1">
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="font-medium text-slate-800">{item.feature}</span>
+                          <span className="text-slate-500">{item.importance}</span>
+                        </div>
+                        <div className="h-2 rounded-full bg-slate-100">
+                          <div className="h-2 rounded-full bg-sky-500" style={{ width: `${Math.max(5, item.importance * 100)}%` }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-white p-5">
+                  <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-500">Dataset health</h3>
+                  <div className="mt-4 space-y-3 text-sm text-slate-700">
+                    <p><span className="font-semibold text-slate-900">Documents:</span> {diagnostics.total_documents}</p>
+                    <p><span className="font-semibold text-slate-900">Evidences:</span> {diagnostics.total_evidences}</p>
+                    <p><span className="font-semibold text-slate-900">Features:</span> {diagnostics.feature_count}</p>
+                    <p><span className="font-semibold text-slate-900">Recommended source:</span> {diagnostics.recommended_source === 'document' ? 'Document-level pipeline' : 'Evidence retrieval pipeline'}</p>
+                  </div>
+                  {diagnostics.warnings?.length > 0 && (
+                    <div className="mt-4 rounded-2xl bg-amber-50 p-3 text-sm text-amber-800">
+                      <ul className="list-disc space-y-1 pl-5">
+                        {diagnostics.warnings.map((warning, index) => (
+                          <li key={index}>{warning}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
+
         <section className="rounded-[2rem] border border-slate-200 bg-white shadow-sm">
           <div className="border-b border-slate-100 px-6 py-5 sm:px-8">
             <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
@@ -616,8 +756,16 @@ export default function MLDashboard() {
                               {datasetType === "classification" ? sample.label : sample.evidence_text || sample.label || '—'}
                             </span>
                           </td>
-                          <td className="px-4 py-4 text-center text-slate-700">{datasetType === "classification" ? (sample.score ? `${sample.score}%` : '—') : (sample.similarity ? `${sample.similarity}%` : sample.score ? `${sample.score}%` : '—')}</td>
-                          <td className="px-4 py-4 text-center text-slate-700">{datasetType === "classification" ? `${sample.rules_count || sample.rules?.length || 0} rules` : sample.vector_length ?? sample.features?.length ?? '—'}</td>
+                          <td className="px-4 py-4 text-center text-slate-700">
+                            {datasetType === "classification"
+                              ? (sample.confidence_score != null ? `${Math.round(sample.confidence_score * 100)}%` : sample.score ? `${Math.round(sample.score)}%` : '—')
+                              : (sample.similarity ? `${sample.similarity}%` : sample.confidence_score != null ? `${Math.round(sample.confidence_score * 100)}%` : '—')}
+                          </td>
+                          <td className="px-4 py-4 text-center text-slate-700">
+                            {datasetType === "classification"
+                              ? (sample.rule_title || sample.rules_count ? `1 rule` : '—')
+                              : (sample.vector_length ?? '—')}
+                          </td>
                           <td className="px-4 py-4 text-slate-600">{sample.created_at ? new Date(sample.created_at).toLocaleString() : '—'}</td>
                           <td className="px-4 py-4 text-right">
                             <button
@@ -640,11 +788,13 @@ export default function MLDashboard() {
                                   </div>
                                   <div className="rounded-2xl border border-slate-200 bg-white p-4">
                                     <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Features count</p>
-                                    <p className="mt-2 text-sm font-semibold text-slate-900">{Array.isArray(sample.features) ? sample.features.length : Object.keys(sample.features || {}).length}</p>
+                                    <p className="mt-2 text-sm font-semibold text-slate-900">{sample.features ? (Array.isArray(sample.features) ? sample.features.length : Object.keys(sample.features).length) : (sample.rule_title ? 1 : 0)}</p>
                                   </div>
                                   <div className="rounded-2xl border border-slate-200 bg-white p-4">
                                     <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Feature vector</p>
-                                    <p className="mt-2 text-sm font-medium text-slate-700 break-words">{Array.isArray(sample.features) ? sample.features.join(', ') : Object.values(sample.features || {}).join(', ') || '—'}</p>
+                                    <p className="mt-2 text-sm font-medium text-slate-700 break-words">
+                                      {sample.features ? (Array.isArray(sample.features) ? sample.features.join(', ') : Object.values(sample.features || {}).join(', ')) : (sample.rule_title ? sample.rule_title : sample.evidence_text?.slice(0, 200) || '—')}
+                                    </p>
                                   </div>
                                 </div>
                                 <div className="rounded-2xl border border-slate-200 bg-white p-4">

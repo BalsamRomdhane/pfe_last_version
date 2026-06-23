@@ -19,9 +19,11 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 from datetime import datetime
 
+import re
+import unicodedata
 from django.db.models import Q
 
-from api.models import Norme, Document, Validation, Rule, TrainingSample
+from api.models import Norme, Document, Validation, Rule, TrainingSample, RuleTrainingSample
 from api.utils import extract_document_text
 from ml.feature_engineering import build_feature_vector_from_text, FeatureExtractor
 
@@ -307,7 +309,227 @@ def generate_iso9001_dataset_simple() -> Dict:
 
 
 # Export public API
+def _clean_text(value: str) -> str:
+    if not value:
+        return ''
+    text = unicodedata.normalize('NFKC', value)
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip()
+
+
+def sync_training_samples_from_evidence(document_ids=None) -> Dict:
+    """Backfill TrainingSample rows from existing RuleTrainingSample evidence.
+
+    This keeps the legacy training dataset table aligned with the evidence
+    repository that the dashboard and ML pipeline already use.
+    """
+    created = 0
+    updated = 0
+    documents = {}
+
+    evidence_qs = RuleTrainingSample.objects.select_related('document', 'rule', 'norm').all()
+    if document_ids is not None:
+        evidence_qs = evidence_qs.filter(document_id__in=document_ids)
+
+    for evidence in evidence_qs:
+        document = evidence.document
+        if not document:
+            continue
+
+        bucket = documents.setdefault(document.id, {
+            'document': document,
+            'features': {},
+            'rule_results': {},
+            'approved_rules': [],
+            'rejected_rules': [],
+        })
+
+        rule_name = evidence.rule_title or (getattr(evidence.rule, 'title', '') or f'Rule {evidence.rule_id}')
+        label = str(evidence.label or '').strip().lower()
+        is_valid = 1 if label == 'approved' else 0 if label == 'rejected' else None
+
+        if is_valid is not None:
+            bucket['features'][rule_name] = is_valid
+            bucket['rule_results'][rule_name] = is_valid
+            if is_valid:
+                bucket['approved_rules'].append(rule_name)
+            else:
+                bucket['rejected_rules'].append(rule_name)
+
+    for document_id, bucket in documents.items():
+        document = bucket['document']
+        features = bucket['features'] or {}
+        total_rules = len(features)
+        valid_rules_count = sum(1 for value in features.values() if value == 1)
+        invalid_rules_count = total_rules - valid_rules_count
+        compliance_score = int(round((valid_rules_count / total_rules) * 100)) if total_rules else 0
+
+        explicit_final_decision = document.final_decision if document.is_finalized else None
+        status_source = (
+            explicit_final_decision
+            if explicit_final_decision and explicit_final_decision != Document.Status.PENDING
+            else document.status
+        )
+        approved_flag = True if status_source in [Document.Status.APPROVED, Document.Status.AUTO_APPROVED] else False if status_source == Document.Status.REJECTED else None
+
+        sample, created_flag = TrainingSample.objects.update_or_create(
+            document=document,
+            defaults={
+                'norm_id': document.norme_id,
+                'features': features,
+                'feature_vector': features,
+                'confidence_score': 0.0,
+                'teamlead_decision': status_source,
+                'final_decision': status_source,
+                'approved': approved_flag,
+                'label': status_source,
+                'standard': document.norme.name if document.norme else 'ISO9001',
+                'total_rules': total_rules,
+                'valid_rules_count': valid_rules_count,
+                'invalid_rules_count': invalid_rules_count,
+                'rule_results_json': bucket['rule_results'],
+                'compliance_score': compliance_score,
+                'approved_rules': bucket['approved_rules'],
+                'rejected_rules': bucket['rejected_rules'],
+                'rule_text': '',
+                'document_text': '',
+                'evidence_text': '',
+            },
+        )
+        if created_flag:
+            created += 1
+        else:
+            updated += 1
+
+    return {
+        'success': True,
+        'created': created,
+        'updated': updated,
+        'documents': len(documents),
+    }
+
+
+def buildTrainingDataset(norm_id: int) -> Dict:
+    """
+    Build a training dataset from the semantic evidence repository.
+    This also backfills the legacy TrainingSample table from existing evidence rows.
+
+    Each RuleTrainingSample becomes one training sample for ML training.
+   """
+    sync_training_samples_from_evidence()
+
+    try:
+        norm = Norme.objects.get(pk=norm_id)
+    except Norme.DoesNotExist:
+        return {
+            'success': False,
+            'error': f'Norm {norm_id} not found',
+            'statistics': {
+                'total_samples': 0,
+                'approved_count': 0,
+                'rejected_count': 0,
+                'rules_count': 0,
+                'training_enabled': False,
+            },
+            'samples': [],
+        }
+
+    samples_qs = RuleTrainingSample.objects.filter(norm=norm).select_related('rule')
+    approved_qs = samples_qs.filter(label='approved')
+    rejected_qs = samples_qs.filter(label='rejected')
+
+    seen = set()
+    cleaned_samples = []
+    for sample in samples_qs:
+        text = _clean_text(sample.evidence_text or '')
+        if not text:
+            continue
+        key = (sample.rule_id, text.lower(), sample.label or '')
+        if key in seen:
+            continue
+        seen.add(key)
+
+        cleaned_samples.append({
+            'id': sample.id,
+            'rule_id': sample.rule_id,
+            'rule_name': sample.rule_title or (sample.rule.title if sample.rule_id else ''),
+            'evidence_text': text,
+            'label': sample.label or 'pending',
+            'score': float(sample.confidence_score or sample.semantic_score or 0.0),
+            'compliance_score': float(sample.confidence_score or sample.semantic_score or 0.0),
+            'norm_id': norm.id,
+            'created_at': sample.created_at.isoformat() if sample.created_at else None,
+            'features': {
+                'evidence_length': len(text),
+                'semantic_score': float(sample.semantic_score or 0.0),
+                'confidence_score': float(sample.confidence_score or 0.0),
+                'rule_category': sample.rule_title or '',
+            },
+        })
+
+    approved_count = sum(1 for item in cleaned_samples if item['label'] == 'approved')
+    rejected_count = sum(1 for item in cleaned_samples if item['label'] == 'rejected')
+    total_samples = approved_count + rejected_count
+
+    rule_ids = set(item['rule_id'] for item in cleaned_samples if item['rule_id'])
+    rules_count = norm.rules.count()
+    coverage_rate = round(len(rule_ids) / max(rules_count, 1) * 100, 1) if rules_count else 0.0
+
+    non_empty = [item['evidence_text'] for item in cleaned_samples]
+    unique_texts = set(non_empty)
+    duplicate_rate = round((1 - len(unique_texts) / max(len(non_empty), 1)) * 100, 1) if non_empty else 0.0
+    avg_length = round(sum(len(t.split()) for t in non_empty) / max(len(non_empty), 1), 1) if non_empty else 0.0
+
+    if total_samples > 0:
+        minority = min(approved_count, rejected_count)
+        class_balance = round(minority / max(total_samples - minority, 1) * 100, 1)
+        class_balance = min(class_balance, 100.0)
+    else:
+        class_balance = 0.0
+
+    richness = round(
+        0.35 * min(total_samples / max(rules_count * 10, 1) * 100, 100)
+        + 0.25 * class_balance
+        + 0.20 * (100 - duplicate_rate)
+        + 0.20 * coverage_rate,
+        1,
+    )
+
+    quality_score = round(
+        0.40 * (100 - duplicate_rate)
+        + 0.30 * min(avg_length / 50 * 100, 100)
+        + 0.30 * class_balance,
+        1,
+    )
+
+    statistics = {
+        'total_samples': total_samples,
+        'approved_count': approved_count,
+        'rejected_count': rejected_count,
+        'pending_count': sum(1 for item in cleaned_samples if item['label'] == 'pending'),
+        'rules_count': rules_count,
+        'covered_rules_count': len(rule_ids),
+        'coverage_rate': coverage_rate,
+        'duplicate_rate': duplicate_rate,
+        'avg_evidence_length': avg_length,
+        'class_balance': class_balance,
+        'dataset_richness': richness,
+        'quality_score': quality_score,
+        'training_enabled': total_samples >= 20,
+        'training_min': 20,
+    }
+
+    return {
+        'success': True,
+        'norm': norm,
+        'statistics': statistics,
+        'samples': cleaned_samples,
+    }
+
+
 __all__ = [
     'ISO9001DatasetBuilder',
     'generate_iso9001_dataset_simple',
+    'buildTrainingDataset',
 ]

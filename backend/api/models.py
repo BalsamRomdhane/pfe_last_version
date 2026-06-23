@@ -1,3 +1,5 @@
+import re
+
 from django.db import models
 
 from .utils import extract_document_text
@@ -199,6 +201,111 @@ class RuleTrainingSample(models.Model):
         return f"RuleTrainingSample(doc={self.document_id}, rule={self.rule_id}, label={self.label})"
 
 
+class DocumentTrainingSample(models.Model):
+    """Dedicated document-level training sample used for compliance prediction.
+
+    This is intentionally separate from RuleTrainingSample so document-level
+    evaluation is not contaminated by per-rule evidence rows.
+    """
+    document = models.OneToOneField(
+        Document,
+        on_delete=models.CASCADE,
+        related_name='document_training_sample'
+    )
+    standard = models.CharField(max_length=50, default='ISO9001')
+
+    total_rules = models.PositiveIntegerField(default=0)
+    passed_rules = models.PositiveIntegerField(default=0)
+    failed_rules = models.PositiveIntegerField(default=0)
+
+    compliance_score = models.FloatField(default=0.0)
+
+    critical_rules_passed = models.PositiveIntegerField(default=0)
+    high_rules_passed = models.PositiveIntegerField(default=0)
+    medium_rules_passed = models.PositiveIntegerField(default=0)
+    low_rules_passed = models.PositiveIntegerField(default=0)
+
+    evidence_count = models.PositiveIntegerField(default=0)
+    text_length = models.PositiveIntegerField(default=0)
+    paragraph_count = models.PositiveIntegerField(default=0)
+
+    feature_vector = models.JSONField(default=list, blank=True)
+    label = models.CharField(max_length=32, blank=True, default='pending')
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Document Training Sample'
+        verbose_name_plural = 'Document Training Samples'
+        indexes = [
+            models.Index(fields=['standard', '-created_at']),
+            models.Index(fields=['label', '-created_at']),
+        ]
+
+    def __str__(self):
+        return f"DocumentTrainingSample(doc={self.document_id}, label={self.label})"
+
+
+class MLOpsConfig(models.Model):
+    """Configuration used by the dashboard and retraining endpoints."""
+    standard = models.CharField(max_length=50, unique=True)
+    last_trained_at = models.DateTimeField(blank=True, null=True)
+    last_trained_doc_count = models.PositiveIntegerField(default=0)
+    current_model_version = models.CharField(max_length=100, blank=True, default='')
+    retraining_threshold = models.PositiveIntegerField(default=1)
+    auto_trigger_enabled = models.BooleanField(default=False)
+    last_f1_score = models.FloatField(default=0.0)
+    last_drift_score = models.FloatField(default=0.0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['standard']
+
+    def __str__(self):
+        return f"MLOpsConfig({self.standard})"
+
+
+class TrainingJob(models.Model):
+    """Record of a training or retraining run triggered by the API."""
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'Pending'
+        RUNNING = 'running', 'Running'
+        SUCCESS = 'success', 'Success'
+        FAILED = 'failed', 'Failed'
+
+    standard = models.CharField(max_length=50, default='ISO9001')
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    start_time = models.DateTimeField(blank=True, null=True)
+    end_time = models.DateTimeField(blank=True, null=True)
+    documents_count = models.PositiveIntegerField(default=0)
+    new_docs_since = models.PositiveIntegerField(default=0)
+    drift_score = models.FloatField(default=0.0)
+    f1_score = models.FloatField(default=0.0)
+    precision_score = models.FloatField(default=0.0)
+    recall_score = models.FloatField(default=0.0)
+    avg_similarity = models.FloatField(default=0.0)
+    model_version = models.CharField(max_length=100, blank=True, default='')
+    jenkins_build_id = models.CharField(max_length=100, blank=True, default='')
+    jenkins_url = models.URLField(blank=True, default='')
+    triggered_by = models.CharField(max_length=150, blank=True, default='')
+    drift_report = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-start_time', '-created_at']
+        indexes = [
+            models.Index(fields=['status', '-start_time']),
+            models.Index(fields=['standard', '-start_time']),
+        ]
+
+    def __str__(self):
+        return f"TrainingJob({self.id}: {self.standard} - {self.status})"
+
+
 def extract_features(document):
     """Build one binary feature per ISO rule from team lead validations."""
     standard = document.norme.name if document.norme else None
@@ -210,14 +317,23 @@ def extract_features(document):
     if not rules:
         return {}
 
+    validations = Validation.objects.filter(document=document).select_related('rule')
     evidence_map = {
         validation.rule_id: 1 if validation.is_valid is True else 0
-        for validation in Validation.objects.filter(document=document).select_related('rule')
+        for validation in validations
     }
+
+    # Normalize rule titles to machine-friendly keys (lowercase, underscores)
+    def _slugify(title: str) -> str:
+        s = (title or '').strip().lower()
+        s = re.sub(r"[^a-z0-9]+", '_', s)
+        s = re.sub(r"__+", '_', s).strip('_')
+        return s or (f'rule_{hash(title) & 0xffff}')
 
     features = {}
     for rule in rules:
-        features[rule.title] = evidence_map.get(rule.id, 0)
+        key = _slugify(rule.title)
+        features[key] = evidence_map.get(rule.id, 0)
 
     return features
 
@@ -253,18 +369,27 @@ def aggregate_validation_metrics(document):
     rule_results_json = {}
     validation_map = {v.rule_id: v for v in validations if getattr(v, 'rule', None)}
 
+    # severity counters
+    severity_counts = {'CRITICAL': 0, 'HIGH': 0, 'MEDIUM': 0, 'LOW': 0}
+
     for rule in rules:
         validation = validation_map.get(rule.id)
         is_valid = 1 if validation is not None and validation.is_valid is True else 0
         rule_results_json[rule.title] = is_valid
         if is_valid:
             valid_rules.append(rule.title)
+            sev = (rule.severity or '').upper()
+            if sev in severity_counts:
+                severity_counts[sev] += 1
         else:
             rejected_rules.append(rule.title)
 
     valid_rules_count = len(valid_rules)
     invalid_rules_count = total_rules - valid_rules_count
     compliance_score = int(round((valid_rules_count / total_rules) * 100)) if total_rules else 0
+
+    # evidence count: number of validations with non-empty evidence_text
+    evidence_count = sum(1 for v in validations if v.evidence_text and v.evidence_text.strip())
 
     return {
         'total_rules': total_rules,
@@ -274,13 +399,66 @@ def aggregate_validation_metrics(document):
         'rejected_rules': rejected_rules,
         'rule_results_json': rule_results_json,
         'compliance_score': compliance_score,
+        'evidence_count': evidence_count,
+        'critical_rules_passed': severity_counts.get('CRITICAL', 0),
+        'high_rules_passed': severity_counts.get('HIGH', 0),
+        'medium_rules_passed': severity_counts.get('MEDIUM', 0),
+        'low_rules_passed': severity_counts.get('LOW', 0),
     }
+
+
+def create_document_training_sample(document):
+    """Create or update the dedicated document-level training sample."""
+    metrics = aggregate_validation_metrics(document)
+    feature_vector = build_validation_feature_vector(document)
+
+    raw_text = ''
+    if document.file:
+        try:
+            raw_text = extract_document_text(document)
+        except Exception:
+            raw_text = ''
+
+    paragraph_count = len([p for p in (raw_text or '').split('\n\n') if p.strip()])
+    text_length = len(raw_text or '')
+
+    status_source = document.final_decision or document.status
+    if status_source in [Document.Status.APPROVED, Document.Status.AUTO_APPROVED]:
+        label = 'approved'
+    elif status_source == Document.Status.REJECTED:
+        label = 'rejected'
+    else:
+        label = 'pending'
+
+    obj, created = DocumentTrainingSample.objects.update_or_create(
+        document=document,
+        defaults={
+            'standard': document.norme.name if document.norme else 'ISO9001',
+            'total_rules': metrics.get('total_rules', 0),
+            'passed_rules': metrics.get('valid_rules_count', 0),
+            'failed_rules': metrics.get('invalid_rules_count', 0),
+            'compliance_score': metrics.get('compliance_score', 0),
+            'critical_rules_passed': metrics.get('critical_rules_passed', 0),
+            'high_rules_passed': metrics.get('high_rules_passed', 0),
+            'medium_rules_passed': metrics.get('medium_rules_passed', 0),
+            'low_rules_passed': metrics.get('low_rules_passed', 0),
+            'evidence_count': metrics.get('evidence_count', 0),
+            'text_length': text_length,
+            'paragraph_count': paragraph_count,
+            'feature_vector': feature_vector,
+            'label': label,
+        },
+    )
+    return obj, created
 
 
 def create_training_sample(document, analysis_metrics=None):
     """Create or update a training sample when a document is validated or reviewed."""
     features = extract_features(document)
-    feature_vector = build_validation_feature_vector(document)
+    # feature_vector as ordered list for legacy models
+    feature_vector_list = build_validation_feature_vector(document)
+    # build dict-based feature_vector with normalized keys and metadata
+    feature_vector = dict(features) if isinstance(features, dict) else {}
     standard = document.norme.name if document.norme else 'ISO9001'
     analysis_metrics = analysis_metrics or {}
     metrics = aggregate_validation_metrics(document)
@@ -304,6 +482,9 @@ def create_training_sample(document, analysis_metrics=None):
                 'evidence_score': float(analysis.get('evidence_score', 0.0)),
                 'teamlead_decision': analysis.get('decision', ''),
             }
+            # text metrics
+            analysis_metrics['text_length'] = len(raw_text or '')
+            analysis_metrics['paragraph_count'] = len([p for p in (raw_text or '').split('\n\n') if p.strip()])
         except Exception:
             analysis_metrics = {}
 
@@ -317,6 +498,24 @@ def create_training_sample(document, analysis_metrics=None):
 
     teamlead_decision = analysis_metrics.get('teamlead_decision', status_source)
     confidence_score = analysis_metrics.get('confidence_score', 0.0)
+    # Enrich feature_vector with metadata useful for ML
+    feature_vector.update({
+        'total_rules': metrics.get('total_rules', 0),
+        'passed_rules': metrics.get('valid_rules_count', 0),
+        'failed_rules': metrics.get('invalid_rules_count', 0),
+        'compliance_score': metrics.get('compliance_score', 0),
+        'critical_rules_passed': metrics.get('critical_rules_passed', 0),
+        'high_rules_passed': metrics.get('high_rules_passed', 0),
+        'medium_rules_passed': metrics.get('medium_rules_passed', 0),
+        'low_rules_passed': metrics.get('low_rules_passed', 0),
+        'evidence_count': metrics.get('evidence_count', 0),
+        'text_length': analysis_metrics.get('text_length', 0),
+        'paragraph_count': analysis_metrics.get('paragraph_count', 0),
+        # legacy list representation kept for compatibility
+        'feature_list': feature_vector_list,
+        # numeric label for ML models
+        'label_numeric': 1 if approved_flag else (0 if approved_flag is False else None),
+    })
 
     sample, created = TrainingSample.objects.update_or_create(
         document=document,

@@ -1,7 +1,53 @@
 import jwt
+from django.conf import settings
 from django.contrib.auth.models import User
+from jwt import PyJWKClient
 from rest_framework import authentication, exceptions
 from rbac.models import UserProfile
+
+
+def _decode_verified_token(token):
+    """Validate JWTs using the local secret for fallback tokens or the realm JWKS for Keycloak tokens."""
+    try:
+        header = jwt.get_unverified_header(token)
+        if header.get('alg') == 'none':
+            raise exceptions.AuthenticationFailed('Token algorithm is not allowed.')
+    except jwt.InvalidTokenError:
+        raise exceptions.AuthenticationFailed('Invalid token format.')
+    except Exception:
+        raise exceptions.AuthenticationFailed('Invalid token format.')
+
+    # Local/dev fallback tokens are signed with Django's secret key.
+    try:
+        return jwt.decode(
+            token,
+            settings.SECRET_KEY,
+            algorithms=['HS256'],
+            options={'verify_exp': True},
+        )
+    except jwt.ExpiredSignatureError:
+        raise exceptions.AuthenticationFailed('Token has expired. Please log in again.')
+    except jwt.InvalidTokenError:
+        pass
+
+    # Real Keycloak tokens are RS256-signed; verify them using the realm JWKS.
+    jwks_url = (
+        f"{settings.KEYCLOAK_SERVER_URL.rstrip('/')}/realms/"
+        f"{settings.KEYCLOAK_REALM}/protocol/openid-connect/certs"
+    )
+    try:
+        signing_key = PyJWKClient(jwks_url).get_signing_key_from_jwt(token)
+        return jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=['RS256'],
+            options={'verify_exp': True},
+        )
+    except jwt.ExpiredSignatureError:
+        raise exceptions.AuthenticationFailed('Token has expired. Please log in again.')
+    except Exception as exc:
+        raise exceptions.AuthenticationFailed(f'Invalid token: {exc}')
+
 
 class KeycloakUser:
     def __init__(self, username=None, roles=None, department=None, token=None):
@@ -27,7 +73,7 @@ class KeycloakAuthentication(authentication.BaseAuthentication):
 
         token = auth[1].decode('utf-8')
         try:
-            decoded = jwt.decode(token, options={"verify_signature": False})
+            decoded = _decode_verified_token(token)
         except Exception as exc:
             raise exceptions.AuthenticationFailed(f'Invalid token: {exc}')
 

@@ -61,6 +61,11 @@ dump.json
 backend/scripts/
 backend/data/
 
+# ── Log files ────────────────────────────────────────────────────────────────
+*.log
+frontend/build.log
+frontend/install.log
+
 # ── Docs generated ───────────────────────────────────────────────────────────
 ARCHITECTURE_ANALYSIS.md
 CLEANUP_SUMMARY.md
