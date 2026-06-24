@@ -94,15 +94,17 @@ pipeline {
         // ────────────────────────────────────────────────────────────
         // STAGE 3 · Django Check & Migrate
         // manage.py check       : verifie la config Django
-        // manage.py migrate     : applique les migrations + syncdb
+        // manage.py migrate     : applique les migrations manquantes
+        //   La migration 0014 utilise ADD COLUMN IF NOT EXISTS (idempotent)
+        //   → plusieurs executions successives ne causent aucune erreur
         // NOTE : --run-syncdb et --check sont mutuellement exclusifs
-        //        en Django 5.x — on les separe
+        //        en Django 5.x — on NE COMBINE PAS les deux flags
         // ────────────────────────────────────────────────────────────
         stage('3 - Django Check') {
             steps {
                 dir("${BACKEND_DIR}") {
                     bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe manage.py check'
-                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe manage.py migrate --run-syncdb'
+                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe manage.py migrate'
                     bat '''
                         chcp 65001 > nul
                         .venv\\Scripts\\python.exe -c "
