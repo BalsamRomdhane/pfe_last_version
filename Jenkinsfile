@@ -16,16 +16,21 @@ pipeline {
     // ── Environnement ────────────────────────────────────────────────
     // AUCUN credentials() ici.
     // Django lit DB_PASSWORD et DJANGO_SECRET_KEY depuis backend/.env
-    // Ces variables sont déjà présentes dans le fichier .env du projet.
+    // PYTHONIOENCODING + PYTHONUTF8 : corrige UnicodeDecodeError psycopg2
+    //   causé par code page Windows 850 dans le terminal Jenkins
     environment {
         BACKEND_DIR            = "${WORKSPACE}\\backend"
         DJANGO_SETTINGS_MODULE = "enterprise_platform.settings"
+
+        // Force UTF-8 partout — obligatoire sur Windows CP850/CP1252
+        PYTHONIOENCODING = "utf-8"
+        PYTHONUTF8       = "1"
 
         // Variables de connexion PostgreSQL — adapter à votre machine
         DB_HOST = "localhost"
         DB_PORT = "5432"
         DB_NAME = "compliance_db"
-        DB_USER = "compliance_user"
+        DB_USER = "postgres"
     }
 
     // ── Paramètres de build ──────────────────────────────────────────
@@ -70,6 +75,7 @@ pipeline {
             steps {
                 dir("${BACKEND_DIR}") {
                     bat '''
+                        chcp 65001 > nul
                         IF NOT EXIST ".venv\\Scripts\\python.exe" (
                             echo [INFO] Creating Python virtual environment...
                             python -m venv .venv
@@ -95,9 +101,10 @@ pipeline {
         stage('3 - Django Check') {
             steps {
                 dir("${BACKEND_DIR}") {
-                    bat '.venv\\Scripts\\python.exe manage.py check'
-                    bat '.venv\\Scripts\\python.exe manage.py migrate --run-syncdb'
+                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe manage.py check'
+                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe manage.py migrate --run-syncdb'
                     bat '''
+                        chcp 65001 > nul
                         .venv\\Scripts\\python.exe -c "
 import django, os
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'enterprise_platform.settings')
@@ -126,18 +133,21 @@ print('[OK] TrainingJob.log_output confirmed')
             steps {
                 dir("${BACKEND_DIR}") {
                     bat '''
+                        chcp 65001 > nul
                         echo [INFO] Running system audit...
                         .venv\\Scripts\\python.exe manage.py system_audit
                     '''
                     bat '''
+                        chcp 65001 > nul
                         echo [INFO] Syncing training datasets...
                         .venv\\Scripts\\python.exe manage.py sync_all_datasets
                     '''
                     script {
                         def forceFlag = params.FORCE_REGEN ? '--force-regen' : ''
-                        bat ".venv\\\\Scripts\\\\python.exe manage.py fill_ml_datasets --seed 42 ${forceFlag}"
+                        bat "chcp 65001 > nul && .venv\\\\Scripts\\\\python.exe manage.py fill_ml_datasets --seed 42 ${forceFlag}"
                     }
                     bat '''
+                        chcp 65001 > nul
                         .venv\\Scripts\\python.exe -c "
 import django, os, sys
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'enterprise_platform.settings')
@@ -166,6 +176,7 @@ print('[OK] Dataset valid:', total, 'labeled samples')
                 bat 'IF NOT EXIST "%WORKSPACE%\\artifacts" mkdir "%WORKSPACE%\\artifacts"'
                 dir("${BACKEND_DIR}") {
                     bat '''
+                        chcp 65001 > nul
                         .venv\\Scripts\\python.exe -c "
 import django, os, json
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'enterprise_platform.settings')
@@ -214,6 +225,7 @@ print('[OK] Drift report saved -> artifacts/drift_report.json')
 
                         if (std == 'ALL' || std == 'ISO9001') {
                             bat '''
+                                chcp 65001 > nul
                                 echo [TRAIN] ISO9001 - train_all_models()
                                 .venv\\Scripts\\python.exe -c "
 import django, os, sys
@@ -231,6 +243,7 @@ print('[OK] ISO9001  best=%-18s  samples=%d' % (result.get('best_model','?'), re
 
                         if (std == 'ALL' || std == 'ISO27001') {
                             bat '''
+                                chcp 65001 > nul
                                 echo [TRAIN] ISO27001 - train_all_models()
                                 .venv\\Scripts\\python.exe -c "
 import django, os, sys
@@ -253,6 +266,7 @@ print('[OK] ISO27001 best=%-18s  samples=%d' % (result.get('best_model','?'), re
 
                         if (std == 'ALL' || std == 'TISAX') {
                             bat '''
+                                chcp 65001 > nul
                                 echo [TRAIN] TISAX - train_all_models()
                                 .venv\\Scripts\\python.exe -c "
 import django, os, sys
@@ -287,6 +301,7 @@ print('[OK] TISAX   best=%-18s  samples=%d' % (result.get('best_model','?'), res
                 bat 'IF NOT EXIST "%WORKSPACE%\\artifacts" mkdir "%WORKSPACE%\\artifacts"'
                 dir("${BACKEND_DIR}") {
                     bat '''
+                        chcp 65001 > nul
                         .venv\\Scripts\\python.exe -c "
 import django, os, json, glob
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'enterprise_platform.settings')
@@ -342,6 +357,7 @@ print('[OK] Evaluation summary -> artifacts/evaluation_summary.json')
             steps {
                 dir("${BACKEND_DIR}") {
                     bat '''
+                        chcp 65001 > nul
                         .venv\\Scripts\\python.exe -c "
 import django, os, json, glob
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'enterprise_platform.settings')
