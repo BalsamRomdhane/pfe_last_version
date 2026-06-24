@@ -77,7 +77,11 @@ pipeline {
                     '''
                     bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe -m pip install --upgrade pip --quiet'
                     bat 'chcp 65001 > nul && .venv\\Scripts\\pip.exe install -r requirements.txt --quiet'
-                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe -c "import django, sklearn, joblib, numpy; print(\"[OK] Core imports verified\")"'
+                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe -c "import django"'
+                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe -c "import sklearn"'
+                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe -c "import joblib"'
+                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe -c "import numpy"'
+                    bat 'echo [OK] Core imports verified'
                 }
             }
         }
