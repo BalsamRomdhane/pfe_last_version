@@ -254,8 +254,12 @@ class MLOpsConfig(models.Model):
     last_trained_at = models.DateTimeField(blank=True, null=True)
     last_trained_doc_count = models.PositiveIntegerField(default=0)
     current_model_version = models.CharField(max_length=100, blank=True, default='')
+    last_model_version = models.CharField(max_length=100, blank=True, default='',
+                                          help_text='Alias kept for backwards compatibility')
     retraining_threshold = models.PositiveIntegerField(default=1)
     auto_trigger_enabled = models.BooleanField(default=False)
+    training_count = models.PositiveIntegerField(default=0, help_text='Total number of completed training runs')
+    dataset_size = models.PositiveIntegerField(default=0, help_text='Number of samples at last training run')
     last_f1_score = models.FloatField(default=0.0)
     last_drift_score = models.FloatField(default=0.0)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -280,9 +284,13 @@ class TrainingJob(models.Model):
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     start_time = models.DateTimeField(blank=True, null=True)
     end_time = models.DateTimeField(blank=True, null=True)
+    # duration_seconds is auto-computed on save when start_time and end_time are set
+    duration_seconds = models.FloatField(default=0.0)
     documents_count = models.PositiveIntegerField(default=0)
+    dataset_size = models.PositiveIntegerField(default=0)   # alias for documents_count used by MLOps UI
     new_docs_since = models.PositiveIntegerField(default=0)
     drift_score = models.FloatField(default=0.0)
+    accuracy = models.FloatField(default=0.0)               # best model accuracy on test set
     f1_score = models.FloatField(default=0.0)
     precision_score = models.FloatField(default=0.0)
     recall_score = models.FloatField(default=0.0)
@@ -302,6 +310,18 @@ class TrainingJob(models.Model):
             models.Index(fields=['status', '-start_time']),
             models.Index(fields=['standard', '-start_time']),
         ]
+
+    def save(self, *args, **kwargs):
+        # Auto-compute duration
+        if self.start_time and self.end_time:
+            delta = self.end_time - self.start_time
+            self.duration_seconds = round(delta.total_seconds(), 2)
+        # Keep dataset_size in sync with documents_count
+        if not self.dataset_size and self.documents_count:
+            self.dataset_size = self.documents_count
+        elif not self.documents_count and self.dataset_size:
+            self.documents_count = self.dataset_size
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"TrainingJob({self.id}: {self.standard} - {self.status})"

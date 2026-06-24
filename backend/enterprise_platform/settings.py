@@ -41,13 +41,31 @@ if load_dotenv:
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'django-insecure-+q0*_7&*9bb0!9f6nc61_v8#8534f=s&#r+alkq063^*(ed$s6')
+# Never use the insecure default in production. Always set DJANGO_SECRET_KEY env var.
+_secret_key_default = 'django-insecure-default-dev-only-do-not-use-in-production'
+SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', _secret_key_default)
+if SECRET_KEY == _secret_key_default and not os.getenv('DEBUG', 'True').lower() in ('true', '1', 'yes'):
+    raise ImproperlyConfigured(
+        "DJANGO_SECRET_KEY must be set to a strong secret in production. "
+        "Never use the insecure default."
+    )
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'True').lower() in ('true', '1', 'yes')
 
 # Allow configuring hosts via environment
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+
+# ── Security headers (activated via env vars in production) ───────────────────
+SESSION_ENGINE = 'django.contrib.sessions.backends.db'
+SECURE_SSL_REDIRECT = os.getenv('SECURE_SSL_REDIRECT', 'False').lower() in ('true', '1', 'yes')
+SECURE_HSTS_SECONDS = int(os.getenv('SECURE_HSTS_SECONDS', '0'))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = SECURE_HSTS_SECONDS > 0
+SECURE_HSTS_PRELOAD = SECURE_HSTS_SECONDS > 0
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https') if SECURE_SSL_REDIRECT else None
+X_FRAME_OPTIONS = 'DENY'
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_BROWSER_XSS_FILTER = True
 
 
 # Application definition
@@ -228,13 +246,13 @@ REST_FRAMEWORK = {
 
 import os
 
-# Keycloak settings
+# Keycloak settings — ALL secrets read from environment, never hardcoded
 KEYCLOAK_SERVER_URL = os.environ.get('KEYCLOAK_SERVER_URL', 'http://localhost:8081')
 KEYCLOAK_REALM = os.environ.get('KEYCLOAK_REALM', 'iso9001-realm')
 KEYCLOAK_CLIENT_ID = os.environ.get('KEYCLOAK_CLIENT_ID', 'iso9001-client')
-KEYCLOAK_CLIENT_SECRET = os.environ.get('KEYCLOAK_CLIENT_SECRET', 'd3XqSEHRtQHKXIEHC0GztCzgXojUOF9O')
+KEYCLOAK_CLIENT_SECRET = os.environ.get('KEYCLOAK_CLIENT_SECRET', '')
 KEYCLOAK_ADMIN_USERNAME = os.environ.get('KEYCLOAK_ADMIN_USERNAME', 'admin')
-KEYCLOAK_ADMIN_PASSWORD = os.environ.get('KEYCLOAK_ADMIN_PASSWORD', 'admin')
+KEYCLOAK_ADMIN_PASSWORD = os.environ.get('KEYCLOAK_ADMIN_PASSWORD', '')
 KEYCLOAK_ADMIN_CLIENT_ID = os.environ.get('KEYCLOAK_ADMIN_CLIENT_ID', 'admin-cli')
 KEYCLOAK_ADMIN_CLIENT_SECRET = os.environ.get('KEYCLOAK_ADMIN_CLIENT_SECRET', '')
 
@@ -299,6 +317,8 @@ SESSION_SAVE_EVERY_REQUEST = False
 SESSION_EXPIRE_AT_BROWSER_CLOSE = True
 SESSION_COOKIE_SECURE = os.environ.get('SESSION_COOKIE_SECURE', 'False').lower() in ('true', '1', 'yes')
 CSRF_COOKIE_SECURE = os.environ.get('CSRF_COOKIE_SECURE', 'False').lower() in ('true', '1', 'yes')
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = 'Lax'
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field

@@ -3875,11 +3875,11 @@ def mlops_drift_api(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsAdmin])
 def mlops_prometheus_metrics_api(request):
     """
     GET /api/metrics/
-    Expose Prometheus-compatible metrics.
+    Expose Prometheus-compatible metrics. Admin only — prevents data leakage.
     """
     from django.http import HttpResponse
     from services.mlops_service import get_prometheus_metrics
