@@ -1,46 +1,31 @@
 // ══════════════════════════════════════════════════════════════════════
 // Jenkinsfile — Enterprise ISO Compliance Platform
 // Pipeline MLOps — Windows local, sans Docker
-// Version finale unique — Soutenance PFE + Démonstration Jenkins
+// Version soutenance PFE — Jenkins vierge, aucun credential requis
 //
-// Basé sur lecture directe du dépôt :
-//   ml/train_models.py           → train_all_models()      [training réel]
-//   services/mlops_service.py    → compute_drift_score()   [drift réel]
-//   services/mlops_service.py    → get_prometheus_metrics() [métriques réelles]
-//   api/management/commands/     → system_audit, sync_all_datasets, fill_ml_datasets
-//   api/models.py + migration 0014 → TrainingJob.log_output [champ confirmé]
-//
-// Stages :
-//   1 · Checkout
-//   2 · Install Dependencies
-//   3 · Django Check & Migrate
-//   4 · Dataset Validation
-//   5 · Drift Detection          [compute_drift_score() — fonction réelle]
-//   6 · ML Training              [train_all_models()    — fonction réelle]
-//   7 · Export Métriques         [get_prometheus_metrics() + *_metrics.json]
-//   8 · TrainingJob Update       [champs confirmés models.py + migration 0014]
+// CORRECTIONS v2 :
+//   ✅ credentials() supprimés — Django lit le .env local directement
+//   ✅ cleanWs() déplacé dans un stage dédié (corrige MissingContextVariableException)
+//   ✅ Branche : */main
+//   ✅ 100% bat, zéro sh/bash
 // ══════════════════════════════════════════════════════════════════════
 
 pipeline {
     agent any
 
     // ── Environnement ────────────────────────────────────────────────
+    // AUCUN credentials() ici.
+    // Django lit DB_PASSWORD et DJANGO_SECRET_KEY depuis backend/.env
+    // Ces variables sont déjà présentes dans le fichier .env du projet.
     environment {
-        BACKEND_DIR  = "${WORKSPACE}\\backend"
-        FRONTEND_DIR = "${WORKSPACE}\\frontend"
-
+        BACKEND_DIR            = "${WORKSPACE}\\backend"
         DJANGO_SETTINGS_MODULE = "enterprise_platform.settings"
 
-        // Variables non-sensibles — modifier selon votre machine
+        // Variables de connexion PostgreSQL — adapter à votre machine
         DB_HOST = "localhost"
         DB_PORT = "5432"
         DB_NAME = "compliance_db"
         DB_USER = "compliance_user"
-
-        // Secrets uniquement dans Jenkins Credentials
-        DB_PASSWORD            = credentials('DB_PASSWORD')
-        DJANGO_SECRET_KEY      = credentials('DJANGO_SECRET_KEY')
-        KEYCLOAK_CLIENT_SECRET = credentials('KEYCLOAK_CLIENT_SECRET')
     }
 
     // ── Paramètres de build ──────────────────────────────────────────
@@ -48,12 +33,12 @@ pipeline {
         choice(
             name: 'STANDARD',
             choices: ['ALL', 'ISO9001', 'ISO27001', 'TISAX'],
-            description: 'Norme ISO à entraîner (ALL = les trois)'
+            description: 'Norme ISO a entrainer (ALL = les trois)'
         )
         booleanParam(
             name: 'FORCE_REGEN',
             defaultValue: false,
-            description: 'Forcer la régénération des datasets synthétiques'
+            description: 'Forcer la regeneration des datasets synthetiques'
         )
     }
 
@@ -69,7 +54,7 @@ pipeline {
         // ────────────────────────────────────────────────────────────
         // STAGE 1 · Checkout
         // ────────────────────────────────────────────────────────────
-        stage('1 · Checkout') {
+        stage('1 - Checkout') {
             steps {
                 checkout scm
                 bat 'git log --oneline -5'
@@ -79,10 +64,9 @@ pipeline {
 
         // ────────────────────────────────────────────────────────────
         // STAGE 2 · Install Dependencies
-        // Crée le venv si absent, installe requirements.txt,
-        // vérifie les imports critiques.
+        // Crée le venv Python si absent, installe requirements.txt
         // ────────────────────────────────────────────────────────────
-        stage('2 · Install Dependencies') {
+        stage('2 - Install Dependencies') {
             steps {
                 dir("${BACKEND_DIR}") {
                     bat '''
@@ -103,15 +87,12 @@ pipeline {
 
         // ────────────────────────────────────────────────────────────
         // STAGE 3 · Django Check & Migrate
-        // manage.py check         : vérifie la configuration Django
-        // manage.py migrate       : applique les migrations en attente
-        //   + --run-syncdb        : crée les tables sans migration manquante
-        // NOTE : --run-syncdb et --check ne peuvent PAS être combinés
-        //        en Django 5.x (flags mutuellement exclusifs)
-        // Vérifie ensuite que log_output existe sur TrainingJob
-        //   (ajouté par migration 0014)
+        // manage.py check       : verifie la config Django
+        // manage.py migrate     : applique les migrations + syncdb
+        // NOTE : --run-syncdb et --check sont mutuellement exclusifs
+        //        en Django 5.x — on les separe
         // ────────────────────────────────────────────────────────────
-        stage('3 · Django Check & Migrate') {
+        stage('3 - Django Check') {
             steps {
                 dir("${BACKEND_DIR}") {
                     bat '.venv\\Scripts\\python.exe manage.py check'
@@ -121,9 +102,9 @@ pipeline {
 import django, os
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'enterprise_platform.settings')
 django.setup()
-from api.models import Norme, TrainingSample, RuleTrainingSample, TrainingJob, MLOpsConfig
+from api.models import Norme, RuleTrainingSample, TrainingJob
 fields = [f.name for f in TrainingJob._meta.get_fields()]
-assert 'log_output' in fields, '[FAIL] TrainingJob.log_output absent — relancer: manage.py migrate'
+assert 'log_output' in fields, '[FAIL] TrainingJob.log_output absent - relancer: manage.py migrate'
 print('[OK] Django OK')
 print('[OK] Norme:', Norme.objects.count())
 print('[OK] RuleTrainingSample:', RuleTrainingSample.objects.count())
@@ -136,13 +117,12 @@ print('[OK] TrainingJob.log_output confirmed')
 
         // ────────────────────────────────────────────────────────────
         // STAGE 4 · Dataset Validation
-        // Commandes réelles confirmées dans api/management/commands/ :
-        //   system_audit        : aucun paramètre
-        //   sync_all_datasets   : aucun paramètre requis
-        //   fill_ml_datasets    : --seed INT | --force-regen | --dry-run
-        // Vérifie ensuite que >= 20 samples labelisés existent.
+        // Commandes reelles dans api/management/commands/ :
+        //   system_audit      : aucun parametre
+        //   sync_all_datasets : aucun parametre requis
+        //   fill_ml_datasets  : --seed INT | --force-regen | --dry-run
         // ────────────────────────────────────────────────────────────
-        stage('4 · Dataset Validation') {
+        stage('4 - Dataset Validation') {
             steps {
                 dir("${BACKEND_DIR}") {
                     bat '''
@@ -166,7 +146,7 @@ from api.models import RuleTrainingSample
 total = RuleTrainingSample.objects.filter(label__in=['approved','rejected']).count()
 print('[INFO] Labeled RuleTrainingSamples:', total)
 if total < 20:
-    print('[FAIL] Insufficient samples (< 20) — pipeline aborted.')
+    print('[FAIL] Insufficient samples (< 20) - pipeline aborted.')
     sys.exit(1)
 print('[OK] Dataset valid:', total, 'labeled samples')
 "
@@ -177,14 +157,11 @@ print('[OK] Dataset valid:', total, 'labeled samples')
 
         // ────────────────────────────────────────────────────────────
         // STAGE 5 · Drift Detection
-        // compute_drift_score(standard: str) → Dict
-        // Confirmé dans services/mlops_service.py
-        // Paramètre : nom EXACT de la norme tel qu'en base de données
-        //   (ex: "ISO 9001 - Controle et validation des documents")
-        //   → on itère sur Norme.objects.all() pour obtenir les vrais noms
-        // Résultat sauvegardé dans artifacts/drift_report.json
+        // compute_drift_score(standard: str) confirme dans
+        // services/mlops_service.py — passe le nom reel de la norme
+        // depuis Norme.objects.all() (pas 'ISO9001' hardcode)
         // ────────────────────────────────────────────────────────────
-        stage('5 · Drift Detection') {
+        stage('5 - Drift Detection') {
             steps {
                 bat 'IF NOT EXIST "%WORKSPACE%\\artifacts" mkdir "%WORKSPACE%\\artifacts"'
                 dir("${BACKEND_DIR}") {
@@ -223,21 +200,13 @@ print('[OK] Drift report saved -> artifacts/drift_report.json')
         // ────────────────────────────────────────────────────────────
         // STAGE 6 · ML Training
         // train_all_models(standard, norme_id, dataset_type)
-        // Confirmé dans ml/train_models.py ligne 614
-        // C'est la SEULE fonction qui produit :
-        //   RandomForest.pkl, LogisticRegression.pkl,
-        //   GradientBoosting.pkl, BiLSTM.pkl, *_metrics.json
+        // Confirme dans ml/train_models.py ligne 614
+        // Produit : RF.pkl, LR.pkl, GBT.pkl, BiLSTM.pkl, *_metrics.json
         //
-        // IMPORTANT : train_compliance (ml/management/commands/) appelle
-        //   compliance_service.retrain_models() → vectorize_rules()
-        //   = vectorisation TF-IDF NLP, pas d'entraînement supervisé
-        //   → ne pas utiliser pour générer les .pkl ML
-        //
-        // ISO27001 / TISAX : on cherche le nom réel en DB via __icontains
-        //   pour correspondre aux noms longs ("ISO 27001 - ...") réellement
-        //   stockés dans Norme.name
+        // ISO27001 / TISAX : recherche le nom reel via __icontains
+        // car les noms en DB sont longs ("ISO 27001 - ...")
         // ────────────────────────────────────────────────────────────
-        stage('6 · ML Training') {
+        stage('6 - ML Training') {
             steps {
                 dir("${BACKEND_DIR}") {
                     script {
@@ -245,7 +214,7 @@ print('[OK] Drift report saved -> artifacts/drift_report.json')
 
                         if (std == 'ALL' || std == 'ISO9001') {
                             bat '''
-                                echo [TRAIN] ISO9001 — train_all_models()
+                                echo [TRAIN] ISO9001 - train_all_models()
                                 .venv\\Scripts\\python.exe -c "
 import django, os, sys
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'enterprise_platform.settings')
@@ -262,7 +231,7 @@ print('[OK] ISO9001  best=%-18s  samples=%d' % (result.get('best_model','?'), re
 
                         if (std == 'ALL' || std == 'ISO27001') {
                             bat '''
-                                echo [TRAIN] ISO27001 — train_all_models()
+                                echo [TRAIN] ISO27001 - train_all_models()
                                 .venv\\Scripts\\python.exe -c "
 import django, os, sys
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'enterprise_platform.settings')
@@ -270,7 +239,7 @@ django.setup()
 from api.models import Norme
 norm = Norme.objects.filter(name__icontains='27001').first()
 if not norm:
-    print('[WARN] ISO27001 norm not found in DB — skipping.')
+    print('[WARN] ISO27001 norm not found in DB - skipping.')
     sys.exit(0)
 from ml.train_models import train_all_models
 result = train_all_models(standard=norm.name, dataset_type='classification')
@@ -284,7 +253,7 @@ print('[OK] ISO27001 best=%-18s  samples=%d' % (result.get('best_model','?'), re
 
                         if (std == 'ALL' || std == 'TISAX') {
                             bat '''
-                                echo [TRAIN] TISAX — train_all_models()
+                                echo [TRAIN] TISAX - train_all_models()
                                 .venv\\Scripts\\python.exe -c "
 import django, os, sys
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'enterprise_platform.settings')
@@ -292,7 +261,7 @@ django.setup()
 from api.models import Norme
 norm = Norme.objects.filter(name__icontains='tisax').first()
 if not norm:
-    print('[WARN] TISAX norm not found in DB — skipping.')
+    print('[WARN] TISAX norm not found in DB - skipping.')
     sys.exit(0)
 from ml.train_models import train_all_models
 result = train_all_models(standard=norm.name, dataset_type='classification')
@@ -309,17 +278,11 @@ print('[OK] TISAX   best=%-18s  samples=%d' % (result.get('best_model','?'), res
         }
 
         // ────────────────────────────────────────────────────────────
-        // STAGE 7 · Export Métriques
-        // get_prometheus_metrics() → str (format Prometheus text)
-        //   confirmé dans services/mlops_service.py — aucun paramètre
-        //   expose : compliance_documents_total, compliance_model_f1_score,
-        //            compliance_drift_score, compliance_training_jobs_total
-        //
-        // *_metrics.json → lus depuis ml/models/ (générés par stage 6)
-        //   format confirmé : { best_model, trained_at, samples, results{} }
-        //   résultats affichés dans les logs Jenkins pour le jury
+        // STAGE 7 · Export Metriques
+        // get_prometheus_metrics() : aucun parametre — retourne str
+        // *_metrics.json : lus depuis ml/models/ (generes stage 6)
         // ────────────────────────────────────────────────────────────
-        stage('7 · Export Métriques') {
+        stage('7 - Export Metriques') {
             steps {
                 bat 'IF NOT EXIST "%WORKSPACE%\\artifacts" mkdir "%WORKSPACE%\\artifacts"'
                 dir("${BACKEND_DIR}") {
@@ -373,18 +336,9 @@ print('[OK] Evaluation summary -> artifacts/evaluation_summary.json')
 
         // ────────────────────────────────────────────────────────────
         // STAGE 8 · TrainingJob Update
-        // Champs TrainingJob confirmés dans :
-        //   api/models.py          : standard, status, start_time, end_time,
-        //                            documents_count, new_docs_since,
-        //                            drift_score, f1_score, precision_score,
-        //                            recall_score, avg_similarity,
-        //                            model_version, jenkins_build_id,
-        //                            jenkins_url, triggered_by, drift_report
-        //   migration 0014         : log_output (ajouté manuellement)
-        // MLOpsConfig mis à jour simultanément (standard, last_trained_at,
-        //   last_trained_doc_count, current_model_version, last_f1_score)
+        // Tous les champs confirmes dans api/models.py + migration 0014
         // ────────────────────────────────────────────────────────────
-        stage('8 · TrainingJob Update') {
+        stage('8 - TrainingJob Update') {
             steps {
                 dir("${BACKEND_DIR}") {
                     bat '''
@@ -402,7 +356,7 @@ created   = 0
 
 metrics_files = glob.glob(os.path.join('ml', 'models', '*_metrics.json'))
 if not metrics_files:
-    print('[WARN] No *_metrics.json found — training may have been skipped or failed.')
+    print('[WARN] No *_metrics.json found - training may have been skipped or failed.')
 else:
     for mf in metrics_files:
         with open(mf, 'r', encoding='utf-8') as f:
@@ -451,19 +405,33 @@ print('[OK] %d TrainingJob(s) recorded in database.' % created)
             }
         }
 
+        // ────────────────────────────────────────────────────────────
+        // STAGE 9 · Cleanup
+        // cleanWs() DOIT etre dans un stage (pas dans post { always })
+        // pour eviter MissingContextVariableException: hudson.FilePath
+        // On supprime uniquement les fichiers Python caches
+        // ────────────────────────────────────────────────────────────
+        stage('9 - Cleanup') {
+            steps {
+                bat '''
+                    echo [INFO] Cleaning Python cache files...
+                    FOR /R "%WORKSPACE%" %%D IN (__pycache__) DO (
+                        IF EXIST "%%D" RMDIR /S /Q "%%D" 2>nul
+                    )
+                    echo [OK] Cleanup done.
+                '''
+            }
+        }
+
     }
     // ════════════════════════════════════════════════════════════════
 
     post {
         success {
-            echo "✅ Pipeline SUCCESS — Build #${env.BUILD_NUMBER} | STANDARD=${params.STANDARD}"
+            echo "Pipeline SUCCESS - Build ${env.BUILD_NUMBER} | STANDARD=${params.STANDARD}"
         }
         failure {
-            echo "❌ Pipeline FAILED  — Build #${env.BUILD_NUMBER} — Consulter les logs ci-dessus"
-        }
-        always {
-            cleanWs(patterns: [[pattern: '**/__pycache__/**', type: 'INCLUDE'],
-                               [pattern: '**/*.pyc',          type: 'INCLUDE']])
+            echo "Pipeline FAILED  - Build ${env.BUILD_NUMBER} - Consulter les logs ci-dessus"
         }
     }
 }
