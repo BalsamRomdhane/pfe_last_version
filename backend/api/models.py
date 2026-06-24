@@ -292,6 +292,7 @@ class TrainingJob(models.Model):
     jenkins_url = models.URLField(blank=True, default='')
     triggered_by = models.CharField(max_length=150, blank=True, default='')
     drift_report = models.JSONField(default=dict, blank=True)
+    log_output   = models.TextField(blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
