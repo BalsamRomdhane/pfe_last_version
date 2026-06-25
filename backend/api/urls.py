@@ -24,9 +24,12 @@ from .views import (
     mlops_jobs_list_api,
     mlops_drift_api,
     mlops_prometheus_metrics_api,
+    mlops_jenkins_status_api,
     # LLM endpoints
     llm_status_api,
     llm_pull_model_api,
+    # AI Insights
+    ai_overview_api,
 )
 from .views import evidence_index_api, evidence_status_api, evidence_duplicates_api, evidence_deduplicate_api, rule_memory_api, add_evidence_api, search_evidence_api, evidence_coverage_diagnostics_api
 from .views import sync_dataset_api, dataset_coherence_api
@@ -91,6 +94,7 @@ urlpatterns = [
 
     # ── MLOps endpoints ───────────────────────────────────────────────────
     path('ml/mlops/status/',                  mlops_status_api,           name='mlops-status'),
+    path('ml/jenkins/status/',                mlops_jenkins_status_api,   name='mlops-jenkins-status'),
     path('ml/trigger-training/',              mlops_trigger_training_api, name='mlops-trigger'),
     path('ml/check-threshold/',               mlops_check_threshold_api,  name='mlops-threshold'),
     path('ml/drift/',                         mlops_drift_api,            name='mlops-drift'),
@@ -101,6 +105,9 @@ urlpatterns = [
     # ── LLM / Ollama endpoints ─────────────────────────────────────────────
     path('llm/status/',                       llm_status_api,             name='llm-status'),
     path('llm/pull/',                         llm_pull_model_api,         name='llm-pull'),
+
+    # ── AI Insights aggregated overview ───────────────────────────────────
+    path('ai/overview/',                      ai_overview_api,            name='ai-overview'),
 
     path('', include(router.urls)),
 ]

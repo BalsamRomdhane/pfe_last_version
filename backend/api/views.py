@@ -1159,140 +1159,223 @@ def ml_train_api(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def ml_models_api(request):
-    """Get list of available ML models with persisted metrics."""
-    import os, json as _json
+    """
+    GET /api/ml/models/?norm_id=<id>
 
-    # Lazy import — train_models may fail if PyTorch is unavailable
+    Returns the list of ML models for the given norm with metrics read from
+    the persisted *_metrics.json file.
+
+    Rules:
+    - accuracy/precision/recall/f1_score are None (not 0) when a model was
+      not trained or its training produced an error.
+    - best_model is selected by F1 (primary) then accuracy (tiebreaker).
+      When two models are exactly tied it is set to "Tie".
+    - A model whose error field is non-empty is marked status="Failed".
+    - No fallback values — the frontend must display "—" for None.
+    """
+    import os, json as _json, datetime as _dt
+
     try:
         from ml.train_models import get_model_path, sanitize_standard
     except Exception:
-        # PyTorch not available — return empty list gracefully
-        return Response({'models': [], 'best_model': None, 'error': 'ML module unavailable (PyTorch version mismatch)'})
+        return Response({'models': [], 'best_model': None,
+                         'error': 'ML module unavailable (PyTorch version mismatch)'})
 
-    models_dir = os.path.join(os.path.dirname(__file__), '..', 'ml', 'models')
-    allowed_algorithms = ["RandomForest", "LogisticRegression", "GradientBoosting", "BiLSTM"]
+    models_dir   = os.path.join(os.path.dirname(__file__), '..', 'ml', 'models')
+    allowed_algos = ["RandomForest", "LogisticRegression", "GradientBoosting", "BiLSTM"]
 
-    norm_id = request.query_params.get('norm_id')
+    norm_id        = request.query_params.get('norm_id')
     standard_prefix = None
-    standard_name = None
+    standard_name   = None
+    best_model_from_json = None
+
     if norm_id:
         try:
             norm = Norme.objects.get(pk=norm_id)
-            standard_name = norm.name
+            standard_name   = norm.name
             standard_prefix = sanitize_standard(norm.name) + '_'
         except (Norme.DoesNotExist, ValueError):
             pass
 
     if not os.path.exists(models_dir):
-        return Response({'models': [{'name': a, 'exists': False} for a in allowed_algorithms]})
+        return Response({'models': [{'name': a, 'exists': False} for a in allowed_algos],
+                         'best_model': None})
 
-    # Load persisted metrics JSON if available
+    # ── Load persisted metrics ────────────────────────────────────────────────
     persisted_metrics = {}
+    persisted_meta    = {}   # top-level fields: trained_at, samples, dataset_quality
     if standard_name:
         metrics_path = os.path.join(models_dir, f"{sanitize_standard(standard_name)}_metrics.json")
         if os.path.exists(metrics_path):
             try:
                 with open(metrics_path, 'r', encoding='utf-8') as f:
                     data = _json.load(f)
-                    persisted_metrics = data.get('results', {})
-                    best_model_name = data.get('best_model')
+                persisted_metrics      = data.get('results', {})
+                best_model_from_json   = data.get('best_model')  # already F1-based
+                persisted_meta = {
+                    'trained_at':      data.get('trained_at'),
+                    'samples':         data.get('samples') or data.get('dataset_size'),
+                    'train_size':      data.get('train_size'),
+                    'val_size':        data.get('val_size'),
+                    'test_size':       data.get('test_size'),
+                    'dataset_quality': data.get('dataset_quality', {}),
+                }
             except Exception:
                 pass
 
-    def normalize_model_name(raw_name: str) -> str:
-        cleaned = raw_name
+    # ── Normalize .pkl filenames to algorithm names ───────────────────────────
+    def _normalize(raw: str) -> str:
+        cleaned = raw
         if standard_prefix and cleaned.startswith(standard_prefix):
             cleaned = cleaned[len(standard_prefix):]
         else:
-            for prefix in ('ISO9001_', 'ISO_9001_', 'ISO9001-', 'ISO_9001-'):
-                if cleaned.startswith(prefix):
-                    cleaned = cleaned[len(prefix):]
+            for px in (standard_prefix or '', 'ISO9001_', 'ISO_9001_'):
+                if px and cleaned.startswith(px):
+                    cleaned = cleaned[len(px):]
                     break
-        if cleaned in allowed_algorithms:
+        if cleaned in allowed_algos:
             return cleaned
         parts = cleaned.split('_')
-        if parts and parts[-1] in allowed_algorithms:
+        if parts and parts[-1] in allowed_algos:
             return parts[-1]
-        return raw_name
+        return raw
 
+    # Build initial dict — all models start as "not found"
     model_info = {
         algo: {
-            'name': algo, 'path': None, 'exists': False,
+            'name': algo, 'id': algo, 'exists': False, 'path': None,
+            # Metrics: None = not trained / no data (NOT 0)
             'accuracy': None, 'precision': None, 'recall': None, 'f1_score': None,
-            'sample_count': None, 'trained_date': None, 'confusion_matrix': None,
+            'sample_count': None, 'training_time': None,
+            'train_size': None, 'val_size': None, 'test_size': None,
+            'trained_date': None, 'confusion_matrix': None,
+            'cross_validation': None, 'feature_importance': [],
+            'error': None, 'pipeline': None,
         }
-        for algo in allowed_algorithms
+        for algo in allowed_algos
     }
 
-    for file in os.listdir(models_dir):
-        if not file.endswith('.pkl'):
+    # Scan disk for .pkl files
+    for fname in os.listdir(models_dir):
+        if not fname.endswith('.pkl'):
             continue
-        raw_name = file.replace('.pkl', '')
-        algorithm = normalize_model_name(raw_name)
+        raw_name  = fname.replace('.pkl', '')
+        algorithm = _normalize(raw_name)
         if algorithm not in model_info:
             continue
-        model_path = os.path.join(models_dir, file)
-        if os.path.exists(model_path):
-            existing = model_info[algorithm]
-            if not existing['exists'] or (standard_prefix and raw_name.startswith(standard_prefix)):
-                import datetime
-                mtime = os.path.getmtime(model_path)
-                trained_date = datetime.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')
-
-                # Merge persisted metrics
-                pm = persisted_metrics.get(algorithm, {})
-                model_info[algorithm] = {
-                    'name': algorithm,
-                    'id': algorithm,
-                    'path': model_path,
-                    'exists': True,
-                    'accuracy':   pm.get('accuracy'),
-                    'precision':  pm.get('precision'),
-                    'recall':     pm.get('recall'),
-                    'f1_score':   pm.get('f1_score'),
-                    'sample_count': pm.get('sample_count'),
-                    'confusion_matrix': pm.get('confusion_matrix'),
-                    'cross_validation': pm.get('cross_validation'),
-                    'feature_importance': pm.get('feature_importance', []),
-                    'trained_date': pm.get('trained_date') or trained_date,
-                    'error': pm.get('error'),
-                }
+        fpath = os.path.join(models_dir, fname)
+        existing = model_info[algorithm]
+        # Prefer files whose name starts with the standard prefix
+        if not existing['exists'] or (standard_prefix and raw_name.startswith(standard_prefix)):
+            mtime        = os.path.getmtime(fpath)
+            disk_date    = _dt.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')
+            pm           = persisted_metrics.get(algorithm, {})
+            model_info[algorithm] = {
+                'name':              algorithm,
+                'id':                algorithm,
+                'exists':            True,
+                'path':              fpath,
+                # Real metrics from JSON — None when absent (not 0)
+                'accuracy':          pm.get('accuracy'),     # may be None
+                'precision':         pm.get('precision'),
+                'recall':            pm.get('recall'),
+                'f1_score':          pm.get('f1_score'),
+                'sample_count':      pm.get('sample_count'),
+                'training_time':     pm.get('training_time'),
+                'train_size':        pm.get('train_size'),
+                'val_size':          pm.get('val_size'),
+                'test_size':         pm.get('test_size'),
+                'trained_date':      pm.get('trained_date') or disk_date,
+                'confusion_matrix':  pm.get('confusion_matrix'),
+                'cross_validation':  pm.get('cross_validation'),
+                'feature_importance': pm.get('feature_importance') or [],
+                # error from training (None = no error)
+                'error':             pm.get('error') or None,
+                'pipeline':          pm.get('pipeline'),
+                'overfitting_gap':   pm.get('overfitting_gap'),
+                'overfitting_level': pm.get('overfitting_level') or pm.get('overfitting_risk'),
+            }
 
     models_list = list(model_info.values())
 
-    # Mark best model (only among models with real metrics)
-    best = max(
-        (m for m in models_list if m.get('accuracy') is not None and m.get('sample_count', 0) > 0),
-        key=lambda m: m['accuracy'],
-        default=None,
-    )
-    if best:
-        for m in models_list:
-            m['is_best'] = (m['name'] == best['name'])
+    # ── Compute best model by F1 → Accuracy (same logic as train_models.py) ──
+    # Use the JSON value when available (already computed with same rule);
+    # recompute from the metrics list as a fallback.
+    best_name = best_model_from_json  # "Tie" or an algorithm name or None
 
-    # Detect suspiciously perfect scores (acc=1.0, f1=1.0) which indicate
-    # overfitting on very small/synthetic datasets. Flag them clearly.
-    for m in models_list:
-        acc = m.get('accuracy')
-        f1 = m.get('f1_score')
-        n = m.get('sample_count') or 0
-        if acc is not None and f1 is not None and acc >= 0.999 and f1 >= 0.999 and n < 50:
-            m['warning'] = 'Perfect score on tiny dataset — model may be overfitted or not properly validated.'
-            m['reliable'] = False
-        elif acc is not None:
-            m['reliable'] = True
+    if not best_name:
+        # Recompute: only consider models with real positive metrics
+        trained = [m for m in models_list
+                   if not m.get('error')
+                   and m.get('f1_score') is not None and m['f1_score'] > 0]
+        if trained:
+            sorted_m = sorted(
+                trained,
+                key=lambda m: (m.get('f1_score', 0), m.get('accuracy', 0)),
+                reverse=True,
+            )
+            top_f1  = sorted_m[0].get('f1_score', 0)
+            top_acc = sorted_m[0].get('accuracy', 0)
+            tied    = [m for m in sorted_m
+                       if abs(m.get('f1_score', 0) - top_f1) <= 0.0001
+                       and abs(m.get('accuracy',  0) - top_acc) <= 0.0001]
+            best_name = 'Tie' if len(tied) > 1 else sorted_m[0]['name']
 
-    # Models with no sample_count are not trained
+    # Inject is_best / is_tie flags
     for m in models_list:
-        if not m.get('exists') or m.get('sample_count') is None or m.get('sample_count', 0) == 0:
-            m['status'] = 'Not trained'
+        if best_name and best_name != 'Tie':
+            m['is_best'] = (m['name'] == best_name)
+            m['is_tie']  = False
+        elif best_name == 'Tie':
+            # Mark all tied models
+            m['is_tie']  = True
+            m['is_best'] = True  # visual indicator for all tied models
+        else:
+            m['is_best'] = False
+            m['is_tie']  = False
+
+    # ── Status label ──────────────────────────────────────────────────────────
+    for m in models_list:
+        if m.get('error'):
+            m['status']  = 'Failed'
+            m['trained'] = False
+        elif not m.get('exists') or m.get('accuracy') is None:
+            m['status']  = 'Not trained'
+            m['trained'] = False
+        elif m.get('accuracy', 0) == 0:
+            m['status']  = 'Failed'
             m['trained'] = False
         else:
             m['trained'] = True
-            if 'status' not in m or not m['status']:
-                m['status'] = 'Trained'
+            # Status derived from actual F1 score
+            f1 = m.get('f1_score', 0) or 0
+            if f1 >= 0.90:
+                m['status'] = 'Excellent'
+            elif f1 >= 0.75:
+                m['status'] = 'Good'
+            elif f1 >= 0.60:
+                m['status'] = 'Adequate'
+            else:
+                m['status'] = 'Poor'
 
-    return Response({'models': models_list, 'best_model': best['name'] if best else None})
+    # ── Overfitting / reliability warning ────────────────────────────────────
+    for m in models_list:
+        acc = m.get('accuracy')
+        f1  = m.get('f1_score')
+        n   = m.get('sample_count') or 0
+        if acc is not None and f1 is not None and acc >= 0.999 and f1 >= 0.999 and n < 50:
+            m['warning']  = 'Perfect score on tiny dataset — likely overfitted.'
+            m['reliable'] = False
+        elif m.get('trained'):
+            m['reliable'] = True
+        else:
+            m['reliable'] = False
+
+    return Response({
+        'models':          models_list,
+        'best_model':      best_name,
+        'dataset_meta':    persisted_meta,
+    })
 
 
 # ===== NOUVELLES VUES POUR L'ANALYSE DE CONFORMITÉ NLP =====
@@ -3657,25 +3740,54 @@ class TrainingJobSerializer_inline:
     """Inline serializer — avoids a separate serializers.py change."""
     @staticmethod
     def serialize(job):
+        # Format model_version: strip "jenkins-0-" prefix that appears when
+        # BUILD_NUMBER=0 (local run without real Jenkins build number).
+        raw_version = job.model_version or ''
+        if raw_version.startswith('jenkins-0-'):
+            display_version = raw_version[len('jenkins-0-'):]
+        elif raw_version.startswith('jenkins-'):
+            # e.g. "jenkins-42-RandomForest" → keep as-is (real build)
+            display_version = raw_version
+        else:
+            display_version = raw_version
+
         return {
             'id': job.id,
             'start_time': job.start_time.isoformat() if job.start_time else None,
             'end_time': job.end_time.isoformat() if job.end_time else None,
+            'duration_seconds': job.duration_seconds,
             'documents_count': job.documents_count,
+            'dataset_size': job.dataset_size,
             'new_docs_since': job.new_docs_since,
             'drift_score': job.drift_score,
+            'accuracy': job.accuracy,
             'f1_score': job.f1_score,
             'precision_score': job.precision_score,
             'recall_score': job.recall_score,
             'avg_similarity': job.avg_similarity,
             'status': job.status,
-            'model_version': job.model_version,
+            'model_version': display_version,
+            'model_version_raw': raw_version,
             'standard': job.standard,
             'jenkins_build_id': job.jenkins_build_id,
             'jenkins_url': job.jenkins_url,
             'triggered_by': job.triggered_by,
             'drift_report': job.drift_report,
+            'log_output': job.log_output,
         }
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, IsAdmin])
+def mlops_jenkins_status_api(request):
+    """
+    GET /api/ml/jenkins/status/
+    Returns a full Jenkins health check result.
+    Performs live network checks — do not call in tight loops.
+    The frontend should call this endpoint on demand (e.g. "Test connection" button).
+    """
+    from services.mlops_service import get_jenkins_health
+    return Response(get_jenkins_health())
 
 
 @api_view(['GET'])
@@ -3685,11 +3797,12 @@ def mlops_status_api(request):
     GET /api/ml/mlops/status/
     Returns overall MLOps dashboard data:
     - training jobs history
-    - per-standard config
-    - document counts since last training
+    - per-standard config with last successful TrainingJob metrics
+    - document/sample counts since last training
     - drift scores
     """
     from services.mlops_service import count_new_documents, compute_drift_score
+    from api.models import RuleTrainingSample
 
     configs = MLOpsConfig.objects.all()
     standards_data = []
@@ -3704,23 +3817,86 @@ def mlops_status_api(request):
         except Exception:
             drift_info = {'drift_score': None, 'status': 'error'}
 
+        # Last successful TrainingJob for this standard — single source of truth
+        # for metrics (f1, precision, recall, accuracy, model_version).
+        last_job = (
+            TrainingJob.objects
+            .filter(standard=cfg.standard, status='success')
+            .order_by('-end_time')
+            .first()
+        )
+        last_job_data = TrainingJobSerializer_inline.serialize(last_job) if last_job else None
+
+        # Total training samples (RuleTrainingSample) — this is what the ML
+        # pipeline actually trains on, not the raw Document upload count.
+        total_samples = RuleTrainingSample.objects.filter(
+            norm__name__iexact=cfg.standard
+        ).count()
+        labeled_samples = RuleTrainingSample.objects.filter(
+            norm__name__iexact=cfg.standard,
+            label__in=['approved', 'rejected'],
+        ).count()
+
+        # New labeled samples since last training — the meaningful "new docs" metric.
+        if cfg.last_trained_at:
+            new_samples = RuleTrainingSample.objects.filter(
+                norm__name__iexact=cfg.standard,
+                label__in=['approved', 'rejected'],
+                created_at__gt=cfg.last_trained_at,
+            ).count()
+        else:
+            new_samples = labeled_samples
+
+        # Use retraining_threshold from MLOpsConfig (set per-standard).
+        threshold = cfg.retraining_threshold
+
+        # Determine the real f1 / model_version from last successful job
+        # rather than relying solely on MLOpsConfig which may be stale.
+        if last_job:
+            effective_f1 = last_job.f1_score if last_job.f1_score else cfg.last_f1_score
+            effective_model_version = last_job_data['model_version'] if last_job_data else cfg.current_model_version
+            effective_drift = last_job.drift_score if last_job.drift_score else cfg.last_drift_score
+        else:
+            effective_f1 = cfg.last_f1_score
+            effective_model_version = cfg.current_model_version
+            effective_drift = cfg.last_drift_score
+
+        needs_training = (
+            cfg.auto_trigger_enabled
+            and new_samples >= threshold
+            and threshold > 0
+        )
+
         standards_data.append({
             'standard': cfg.standard,
             'last_trained_at': cfg.last_trained_at.isoformat() if cfg.last_trained_at else None,
             'last_trained_doc_count': cfg.last_trained_doc_count,
-            'current_model_version': cfg.current_model_version,
-            'retraining_threshold': cfg.retraining_threshold,
+            # Model version cleaned of "jenkins-0-" placeholder prefix
+            'current_model_version': effective_model_version or None,
+            'retraining_threshold': threshold,
             'auto_trigger_enabled': cfg.auto_trigger_enabled,
-            'last_f1_score': cfg.last_f1_score,
-            'last_drift_score': cfg.last_drift_score,
-            'new_documents': doc_info.get('new_documents', 0),
+            # Metrics from last successful job (authoritative)
+            'last_f1_score': effective_f1 if effective_f1 else None,
+            'last_drift_score': effective_drift if effective_drift else None,
+            # Counts based on RuleTrainingSample (what the pipeline trains on)
+            'total_samples': total_samples,
+            'labeled_samples': labeled_samples,
+            'new_samples': new_samples,
+            # Legacy field kept for compatibility: raw document uploads
             'total_documents': doc_info.get('total_documents', 0),
-            'needs_training': doc_info.get('needs_training', False),
+            'new_documents': new_samples,
+            'needs_training': needs_training,
             'drift': drift_info,
+            # Full last job details for the detail panel
+            'last_job': last_job_data,
         })
 
-    # Recent jobs
-    recent_jobs = TrainingJob.objects.order_by('-start_time')[:20]
+    # Recent jobs — strip any with standard='' or clearly garbage data
+    recent_jobs = (
+        TrainingJob.objects
+        .exclude(standard='')
+        .order_by('-start_time')[:20]
+    )
     jobs_data = [TrainingJobSerializer_inline.serialize(j) for j in recent_jobs]
 
     # Aggregate stats
@@ -3730,6 +3906,25 @@ def mlops_status_api(request):
     running_jobs = TrainingJob.objects.filter(status='running').count()
 
     last_success = TrainingJob.objects.filter(status='success').order_by('-end_time').first()
+
+    # Jenkins status: use full health check (reachability + auth + job existence).
+    # Re-read env vars at request time so changes take effect without restart.
+    from services.mlops_service import get_jenkins_health
+    jenkins_health = get_jenkins_health()
+    jenkins_info = {
+        'configured':    jenkins_health['configured'],
+        'reachable':     jenkins_health['reachable'],
+        'authenticated': jenkins_health['authenticated'],
+        'connected':     jenkins_health['connected'],
+        'local_training': jenkins_health['local_training'],
+        'remote_trigger': jenkins_health['remote_trigger'],
+        'version':       jenkins_health.get('version'),
+        'status':        jenkins_health['status'],
+        'message':       jenkins_health['message'],
+        'url':           jenkins_health.get('jenkins_url'),
+        'job_name':      jenkins_health.get('job_name'),
+        'checked_at':    jenkins_health.get('checked_at'),
+    }
 
     return Response({
         'standards': standards_data,
@@ -3741,8 +3936,10 @@ def mlops_status_api(request):
             'running_jobs': running_jobs,
             'last_successful_job': TrainingJobSerializer_inline.serialize(last_success) if last_success else None,
         },
-        # Tells the frontend whether Jenkins is configured without exposing the token
-        'jenkins_configured': bool(os.getenv('JENKINS_TOKEN', '').strip()),
+        # Structured Jenkins health — single source of truth for the frontend
+        'jenkins': jenkins_info,
+        # Kept for backward compat with older frontend code
+        'jenkins_configured': jenkins_health['connected'],
     })
 
 
@@ -3752,32 +3949,60 @@ def mlops_trigger_training_api(request):
     """
     POST /api/ml/trigger-training/
     Body: { "standard": "ISO9001", "force": false }
-    - Checks if new documents >= threshold
+    - Checks if new labeled RuleTrainingSamples >= threshold
     - Triggers Jenkins pipeline if conditions met (or force=true)
     """
-    from services.mlops_service import count_new_documents, trigger_jenkins_pipeline
+    from services.mlops_service import trigger_jenkins_pipeline
+    from api.models import RuleTrainingSample
 
     standard = request.data.get('standard', '')
     force    = request.data.get('force', False)
 
     if not standard:
-        # Auto-detect from existing norms
         norme = Norme.objects.first()
-        standard = norme.name if norme else 'ISO9001'
+        standard = norme.name if norme else ''
 
-    doc_info = count_new_documents(standard)
+    if not standard:
+        return Response({'error': 'No standard provided and no norm found in database.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    if not force and not doc_info.get('needs_training'):
+    # Use MLOpsConfig as source for threshold
+    cfg, _ = MLOpsConfig.objects.get_or_create(
+        standard=standard,
+        defaults={'retraining_threshold': int(os.getenv('MLOPS_RETRAINING_THRESHOLD', '10'))},
+    )
+
+    total_samples = RuleTrainingSample.objects.filter(
+        norm__name__iexact=standard,
+        label__in=['approved', 'rejected'],
+    ).count()
+
+    if cfg.last_trained_at:
+        new_samples = RuleTrainingSample.objects.filter(
+            norm__name__iexact=standard,
+            label__in=['approved', 'rejected'],
+            created_at__gt=cfg.last_trained_at,
+        ).count()
+    else:
+        new_samples = total_samples
+
+    doc_info = {
+        'standard': standard,
+        'total_documents': total_samples,
+        'new_documents': new_samples,
+        'threshold': cfg.retraining_threshold,
+        'needs_training': new_samples >= cfg.retraining_threshold,
+    }
+
+    if not force and not doc_info['needs_training']:
         return Response({
             'triggered': False,
             'reason': (
-                f"Only {doc_info['new_documents']}/{doc_info['threshold']} new documents. "
+                f"Only {new_samples}/{cfg.retraining_threshold} new labeled samples. "
                 "Threshold not reached. Pass force=true to override."
             ),
             'doc_info': doc_info,
         }, status=status.HTTP_200_OK)
 
-    # force=True bypasses threshold check — always triggers pipeline
     result = trigger_jenkins_pipeline(standard, doc_info)
     result['doc_info'] = doc_info
 
@@ -3790,17 +4015,47 @@ def mlops_trigger_training_api(request):
 def mlops_check_threshold_api(request):
     """
     GET /api/ml/check-threshold/?standard=ISO9001
-    Returns whether retraining is needed for the given standard.
+    Returns whether retraining is needed for the given standard,
+    based on labeled RuleTrainingSample count (same source as training).
     """
-    from services.mlops_service import count_new_documents
+    from api.models import RuleTrainingSample
 
     standard = request.query_params.get('standard', '')
     if not standard:
         norme = Norme.objects.first()
-        standard = norme.name if norme else 'ISO9001'
+        standard = norme.name if norme else ''
 
-    doc_info = count_new_documents(standard)
-    return Response(doc_info)
+    if not standard:
+        return Response({'error': 'No standard provided and no norm found.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    cfg, _ = MLOpsConfig.objects.get_or_create(
+        standard=standard,
+        defaults={'retraining_threshold': int(os.getenv('MLOPS_RETRAINING_THRESHOLD', '10'))},
+    )
+
+    total_samples = RuleTrainingSample.objects.filter(
+        norm__name__iexact=standard,
+        label__in=['approved', 'rejected'],
+    ).count()
+
+    if cfg.last_trained_at:
+        new_samples = RuleTrainingSample.objects.filter(
+            norm__name__iexact=standard,
+            label__in=['approved', 'rejected'],
+            created_at__gt=cfg.last_trained_at,
+        ).count()
+    else:
+        new_samples = total_samples
+
+    return Response({
+        'standard': standard,
+        'total_documents': total_samples,
+        'new_documents': new_samples,
+        'last_trained_at': cfg.last_trained_at.isoformat() if cfg.last_trained_at else None,
+        'threshold': cfg.retraining_threshold,
+        'needs_training': new_samples >= cfg.retraining_threshold,
+        'current_model_version': cfg.current_model_version or None,
+    })
 
 
 @api_view(['POST'])
@@ -4016,3 +4271,303 @@ def llm_pull_model_api(request):
     result = pull_model(model)
     st = status.HTTP_200_OK if result.get('success') else status.HTTP_503_SERVICE_UNAVAILABLE
     return Response(result, status=st)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# AI INSIGHTS — Aggregated overview endpoint
+# GET /api/ai/overview/
+# ═══════════════════════════════════════════════════════════════════════════
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, IsTeamLeadOrAdmin])
+def ai_overview_api(request):
+    """
+    GET /api/ai/overview/
+    Aggregated AI intelligence summary for the AI Insights dashboard.
+    Returns: models, evidence, training jobs, drift, health, timeline.
+    """
+    import os, json as _json
+    from django.db.models import Count, Avg, Q
+    from django.utils import timezone as tz
+    from services.llm_service import get_ollama_status
+    from services.mlops_service import compute_drift_score
+
+    # ── Models from metrics JSON ──────────────────────────────────────────
+    models_dir = os.path.join(os.path.dirname(__file__), '..', 'ml', 'models')
+    allowed_algos = ["RandomForest", "LogisticRegression", "GradientBoosting", "BiLSTM"]
+    all_models_info = []
+    best_model_overall = None
+    best_f1_overall = -1.0
+
+    norms = list(Norme.objects.all())
+    standards = [n.name for n in norms]
+
+    try:
+        from ml.train_models import sanitize_standard
+    except Exception:
+        sanitize_standard = lambda s: s.replace(' ', '_').upper()
+
+    for std in standards:
+        metrics_path = os.path.join(models_dir, f"{sanitize_standard(std)}_metrics.json")
+        if not os.path.exists(metrics_path):
+            continue
+        try:
+            with open(metrics_path, 'r', encoding='utf-8') as f:
+                data = _json.load(f)
+            results = data.get('results', {})
+            best_in_std = data.get('best_model')
+            trained_at = data.get('trained_at')
+            for algo, metrics in results.items():
+                if algo not in allowed_algos:
+                    continue
+                f1 = metrics.get('f1_score')
+                acc = metrics.get('accuracy')
+                all_models_info.append({
+                    'standard': std,
+                    'name': algo,
+                    'accuracy': acc,
+                    'f1_score': f1,
+                    'precision': metrics.get('precision'),
+                    'recall': metrics.get('recall'),
+                    'training_time': metrics.get('training_time'),
+                    'trained_at': trained_at,
+                    'is_best': (algo == best_in_std),
+                    'error': metrics.get('error'),
+                    'feature_importance': metrics.get('feature_importance') or [],
+                    'cross_validation': metrics.get('cross_validation'),
+                    'confusion_matrix': metrics.get('confusion_matrix'),
+                    'sample_count': metrics.get('sample_count'),
+                })
+                if f1 is not None and float(f1) > best_f1_overall:
+                    best_f1_overall = float(f1)
+                    best_model_overall = {'standard': std, 'name': algo, 'f1_score': f1, 'accuracy': acc}
+        except Exception:
+            pass
+
+    # ── Evidence / dataset stats ──────────────────────────────────────────
+    total_evidence = RuleTrainingSample.objects.count()
+    approved_ev = RuleTrainingSample.objects.filter(label='approved').count()
+    rejected_ev = RuleTrainingSample.objects.filter(label='rejected').count()
+    rules_covered = RuleTrainingSample.objects.values('rule_id').distinct().count()
+    avg_confidence = RuleTrainingSample.objects.aggregate(avg=Avg('confidence_score'))['avg'] or 0
+    total_rules_all = Rule.objects.count()
+
+    # Duplicates
+    from collections import Counter
+    ev_texts = list(RuleTrainingSample.objects.exclude(evidence_text='').values_list('evidence_text', flat=True))
+    dup_counter = Counter(ev_texts)
+    duplicate_count = sum(v - 1 for v in dup_counter.values() if v > 1)
+    dup_rate = round((1 - len(set(ev_texts)) / max(len(ev_texts), 1)) * 100, 1) if ev_texts else 0
+
+    # ── Training jobs stats ───────────────────────────────────────────────
+    total_jobs = TrainingJob.objects.count()
+    success_jobs = TrainingJob.objects.filter(status='success').count()
+    failed_jobs = TrainingJob.objects.filter(status='failed').count()
+    running_jobs = TrainingJob.objects.filter(status='running').count()
+    last_success = TrainingJob.objects.filter(status='success').order_by('-end_time').first()
+    last_job = TrainingJob.objects.order_by('-created_at').first()
+
+    avg_f1 = TrainingJob.objects.filter(status='success', f1_score__gt=0).aggregate(avg=Avg('f1_score'))['avg']
+    avg_drift = TrainingJob.objects.filter(status='success').aggregate(avg=Avg('drift_score'))['avg']
+
+    # ── Drift per standard ────────────────────────────────────────────────
+    drift_by_standard = {}
+    for std in standards[:3]:  # limit to 3 to avoid slow response
+        try:
+            drift_by_standard[std] = compute_drift_score(std)
+        except Exception:
+            drift_by_standard[std] = {'drift_score': None, 'status': 'error'}
+
+    global_drift = 0.0
+    drift_values = [v.get('drift_score', 0) for v in drift_by_standard.values() if v.get('drift_score') is not None]
+    if drift_values:
+        global_drift = round(sum(drift_values) / len(drift_values), 4)
+
+    # ── FAISS / Embedding index ───────────────────────────────────────────
+    faiss_meta = None
+    if load_evidence_index_metadata is not None:
+        try:
+            faiss_meta = load_evidence_index_metadata()
+        except Exception:
+            pass
+
+    embedding_model = (faiss_meta.get('embedding_model') if faiss_meta else None) or 'tfidf-fallback'
+    vector_count = (faiss_meta.get('indexed_evidences') if faiss_meta else None) or total_evidence
+    vector_dim = (faiss_meta.get('vector_dim') if faiss_meta else None)
+    last_indexed = (faiss_meta.get('last_trained') if faiss_meta else None)
+
+    # ── LLM / Ollama ──────────────────────────────────────────────────────
+    try:
+        llm_status = get_ollama_status()
+    except Exception:
+        llm_status = {'available': False, 'reason': 'Error checking Ollama'}
+
+    # ── MLOps configs ────────────────────────────────────────────────────
+    configs = list(MLOpsConfig.objects.all().values(
+        'standard', 'last_trained_at', 'current_model_version',
+        'last_f1_score', 'last_drift_score', 'training_count', 'dataset_size'
+    ))
+
+    # ── Timeline events (training + drift significant events) ─────────────
+    timeline_jobs = list(
+        TrainingJob.objects.order_by('-created_at')[:15].values(
+            'id', 'standard', 'status', 'start_time', 'end_time',
+            'f1_score', 'drift_score', 'model_version', 'documents_count',
+            'triggered_by', 'jenkins_build_id'
+        )
+    )
+
+    # ── Determine AI health score ─────────────────────────────────────────
+    health_score = 100
+    health_issues = []
+
+    if not llm_status.get('available'):
+        health_score -= 15
+        health_issues.append('LLM offline (Ollama not available)')
+    if dup_rate > 10:
+        health_score -= 10
+        health_issues.append(f'High duplication rate: {dup_rate}%')
+    if global_drift > 0.3:
+        health_score -= 20
+        health_issues.append(f'Critical drift detected: {round(global_drift * 100, 1)}%')
+    elif global_drift > 0.15:
+        health_score -= 10
+        health_issues.append(f'Drift warning: {round(global_drift * 100, 1)}%')
+    if total_evidence < 10:
+        health_score -= 20
+        health_issues.append('Insufficient training data')
+    if best_model_overall and best_f1_overall < 0.6:
+        health_score -= 15
+        health_issues.append(f'Low model F1: {round(best_f1_overall * 100, 1)}%')
+    if failed_jobs > success_jobs and total_jobs > 0:
+        health_score -= 10
+        health_issues.append('More failed training jobs than successful ones')
+
+    health_score = max(0, health_score)
+    health_label = (
+        'Excellent' if health_score >= 90
+        else 'Good' if health_score >= 75
+        else 'Degraded' if health_score >= 50
+        else 'Critical'
+    )
+
+    # ── Recommendations engine ────────────────────────────────────────────
+    recommendations = []
+    if dup_rate > 5:
+        recommendations.append({
+            'type': 'dataset',
+            'priority': 'high' if dup_rate > 15 else 'medium',
+            'title': 'Supprimer les doublons',
+            'message': f'{duplicate_count} doublons détectés ({dup_rate}%). Nettoyer et réindexer FAISS.',
+            'action': 'deduplicate',
+        })
+    if global_drift > 0.15:
+        recommendations.append({
+            'type': 'drift',
+            'priority': 'high' if global_drift > 0.3 else 'medium',
+            'title': 'Drift détecté — Relancer l\'entraînement',
+            'message': f'Drift global: {round(global_drift * 100, 1)}%. Les données ont significativement évolué.',
+            'action': 'retrain',
+        })
+    if total_evidence > 0:
+        balance = round(approved_ev / max(rejected_ev, 1), 2)
+        if balance > 4 or balance < 0.25:
+            recommendations.append({
+                'type': 'dataset',
+                'priority': 'medium',
+                'title': 'Dataset déséquilibré',
+                'message': f'Ratio approuvé/rejeté: {balance}. Ajouter plus d\'exemples de la classe minoritaire.',
+                'action': 'balance',
+            })
+    if not llm_status.get('available'):
+        recommendations.append({
+            'type': 'llm',
+            'priority': 'low',
+            'title': 'Assistant IA hors ligne',
+            'message': 'Ollama n\'est pas disponible. Démarrer le service ou configurer OLLAMA_URL.',
+            'action': 'start_llm',
+        })
+    if rules_covered < total_rules_all * 0.8 and total_rules_all > 0:
+        recommendations.append({
+            'type': 'coverage',
+            'priority': 'medium',
+            'title': 'Couverture insuffisante',
+            'message': f'Seulement {rules_covered}/{total_rules_all} règles ont des preuves. Ajouter des validations.',
+            'action': 'add_evidence',
+        })
+    if faiss_meta is None:
+        recommendations.append({
+            'type': 'faiss',
+            'priority': 'medium',
+            'title': 'Index FAISS non construit',
+            'message': 'Aucun index FAISS trouvé. Construire l\'index pour activer la recherche sémantique.',
+            'action': 'build_index',
+        })
+    if last_success is None and total_evidence > 10:
+        recommendations.append({
+            'type': 'training',
+            'priority': 'high',
+            'title': 'Aucun entraînement réussi',
+            'message': 'Des données sont disponibles mais aucun modèle n\'a été entraîné avec succès.',
+            'action': 'train',
+        })
+
+    return Response({
+        'summary': {
+            'total_models': len(all_models_info),
+            'available_standards': standards,
+            'total_evidence': total_evidence,
+            'approved_evidence': approved_ev,
+            'rejected_evidence': rejected_ev,
+            'rules_covered': rules_covered,
+            'total_rules': total_rules_all,
+            'duplicate_count': duplicate_count,
+            'duplication_rate': dup_rate,
+            'avg_confidence': round(float(avg_confidence) * 100, 1),
+            'global_drift': global_drift,
+            'avg_f1': round(float(avg_f1) * 100, 1) if avg_f1 else None,
+            'avg_drift': round(float(avg_drift) * 100, 1) if avg_drift else None,
+        },
+        'models': all_models_info,
+        'best_model': best_model_overall,
+        'mlops_configs': configs,
+        'jobs': {
+            'total': total_jobs,
+            'success': success_jobs,
+            'failed': failed_jobs,
+            'running': running_jobs,
+            'last_success': {
+                'id': last_success.id,
+                'standard': last_success.standard,
+                'end_time': last_success.end_time.isoformat() if last_success.end_time else None,
+                'f1_score': last_success.f1_score,
+                'model_version': last_success.model_version,
+            } if last_success else None,
+        },
+        'drift': {
+            'global': global_drift,
+            'by_standard': drift_by_standard,
+        },
+        'faiss': {
+            'embedding_model': embedding_model,
+            'vector_count': vector_count,
+            'vector_dim': vector_dim,
+            'last_indexed': last_indexed,
+            'index_built': faiss_meta is not None,
+        },
+        'llm': {
+            'available': llm_status.get('available', False),
+            'model': llm_status.get('model'),
+            'models': llm_status.get('models', []),
+            'url': llm_status.get('url'),
+            'reason': llm_status.get('reason'),
+        },
+        'health': {
+            'score': health_score,
+            'label': health_label,
+            'issues': health_issues,
+        },
+        'recommendations': recommendations,
+        'timeline': timeline_jobs,
+        'computed_at': tz.now().isoformat(),
+    })
