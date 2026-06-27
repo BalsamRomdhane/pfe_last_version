@@ -8,8 +8,8 @@
 //   3  · Django Check & Migrate
 //   4  · Dataset Validation
 //   5  · Drift Detection
-//   6  · SonarQube Analysis        ← NEW (DevSecOps)
-//   7  · Quality Gate              ← NEW (DevSecOps)
+//   6  · SonarQube Analysis        (DevSecOps)
+//   7  · Quality Gate              (DevSecOps)
 //   8  · ML Training
 //   9  · Export Metriques
 //   10 · TrainingJob Update
@@ -21,30 +21,34 @@
 //   Aucun bloc python -c "..." multi-lignes dans ce fichier
 //
 // SONARQUBE :
-//   - Jenkins tool : SonarScanner
-//   - Jenkins server : SonarQube
-//   - Credentials managed by Jenkins (no hardcoded tokens)
-//   - sonar-project.properties at workspace root
+//   - Jenkins tool name  : SonarScanner   (Manage Jenkins > Tools)
+//   - Jenkins server name: SonarQube      (Manage Jenkins > System > SonarQube Servers)
+//   - Credential ID      : sonarqube-token (Secret Text)
+//   - sonar-project.properties au root du workspace
+//   - Aucun token ni URL hardcodes — injectes par withSonarQubeEnv
 // ══════════════════════════════════════════════════════════════════════
 
 pipeline {
     agent any
 
+    // ── Variables d'environnement globales ──────────────────────────
     environment {
+        // Chemin vers le backend Django
         BACKEND_DIR            = "${WORKSPACE}\\backend"
         DJANGO_SETTINGS_MODULE = "enterprise_platform.settings"
 
-        // UTF-8 force — obligatoire Windows CP850/CP1252
+        // Force UTF-8 — obligatoire sur Windows CP850/CP1252
         PYTHONIOENCODING = "utf-8"
         PYTHONUTF8       = "1"
 
-        // PostgreSQL — adapter selon votre machine
+        // PostgreSQL — adapter selon la machine locale
         DB_HOST = "localhost"
         DB_PORT = "5432"
         DB_NAME = "compliance_db"
         DB_USER = "postgres"
     }
 
+    // ── Parametres de build ─────────────────────────────────────────
     parameters {
         choice(
             name: 'STANDARD',
@@ -63,6 +67,7 @@ pipeline {
         )
     }
 
+    // ── Options pipeline ────────────────────────────────────────────
     options {
         timeout(time: 60, unit: 'MINUTES')
         buildDiscarder(logRotator(numToKeepStr: '10'))
@@ -74,23 +79,26 @@ pipeline {
 
         // ────────────────────────────────────────────────────────────
         // STAGE 1 · Checkout
+        //
         // Recupere le code source depuis le SCM configure dans Jenkins.
-        // Affiche les 5 derniers commits et le statut git pour traçabilite.
+        // Affiche les 5 derniers commits et le statut git pour
+        // tracabilite et debug.
         // ────────────────────────────────────────────────────────────
         stage('1 - Checkout') {
             steps {
-                echo "[INFO] Checkout du depot — Build #${env.BUILD_NUMBER}"
+                echo "[INFO] Checkout du depot - Build #${env.BUILD_NUMBER}"
                 checkout scm
                 bat 'chcp 65001 > nul && git log --oneline -5'
                 bat 'chcp 65001 > nul && git status'
-                echo "[OK] Checkout termine — branche : ${env.GIT_BRANCH ?: 'N/A'}"
+                echo "[OK] Checkout termine - branche : ${env.GIT_BRANCH ?: 'N/A'}"
             }
         }
 
         // ────────────────────────────────────────────────────────────
         // STAGE 2 · Install Dependencies
+        //
         // Cree ou reutilise le venv Python .venv dans backend/.
-        // Installe les dependances depuis requirements.txt.
+        // Installe toutes les dependances depuis requirements.txt.
         // Verifie les imports critiques : django, sklearn, joblib, numpy.
         // ────────────────────────────────────────────────────────────
         stage('2 - Install Dependencies') {
@@ -120,6 +128,7 @@ pipeline {
 
         // ────────────────────────────────────────────────────────────
         // STAGE 3 · Django Check & Migrate
+        //
         // Verifie la configuration Django (manage.py check).
         // Applique les migrations de base de donnees.
         // Execute ci/check_django.py pour validation approfondie.
@@ -132,12 +141,13 @@ pipeline {
                     bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe manage.py migrate'
                     bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe ci\\check_django.py'
                 }
-                echo "[OK] Django operationnel — base de donnees synchronisee."
+                echo "[OK] Django operationnel - base de donnees synchronisee."
             }
         }
 
         // ────────────────────────────────────────────────────────────
         // STAGE 4 · Dataset Validation
+        //
         // Audite le systeme, synchronise les datasets ISO, remplit
         // les donnees ML avec fill_ml_datasets.
         // Scripts : ci/check_dataset.py
@@ -161,10 +171,11 @@ pipeline {
 
         // ────────────────────────────────────────────────────────────
         // STAGE 5 · Drift Detection
+        //
         // Calcule le drift semantique entre donnees historiques et
-        // recentes via TF-IDF cosinus.
-        // Produit artifacts/drift_report.json.
-        // Script : ci/run_drift.py
+        // recentes via TF-IDF cosinus (70% hist / 30% recent).
+        // Produit : artifacts/drift_report.json
+        // Script  : ci/run_drift.py
         // ────────────────────────────────────────────────────────────
         stage('5 - Drift Detection') {
             steps {
@@ -185,23 +196,49 @@ pipeline {
 
         // ────────────────────────────────────────────────────────────
         // STAGE 6 · SonarQube Analysis
+        //
         // Analyse statique du code source (Python + React/JS).
-        // Utilise le fichier sonar-project.properties a la racine.
-        // Le token et l'URL sont geres par Jenkins (withSonarQubeEnv).
-        // Peut etre ignore avec le parametre SKIP_SONAR=true.
+        // Le scanner est execute depuis la RACINE du workspace afin
+        // que sonar-project.properties soit detecte automatiquement.
+        //
+        // FIX APPLIQUE :
+        //   dir("${WORKSPACE}") force l'execution depuis la racine.
+        //   Sans ce dir(), le scanner herite du working directory
+        //   du stage precedent (backend/) et ne trouve pas
+        //   sonar-project.properties.
+        //
+        // SECURITE :
+        //   withSonarQubeEnv('SonarQube') injecte automatiquement :
+        //     SONAR_HOST_URL  = valeur configuree dans Jenkins
+        //     SONAR_AUTH_TOKEN = credential sonarqube-token
+        //   Aucun token ni URL ne doit apparaitre dans ce fichier.
+        //
+        // CONDITION :
+        //   Le stage est ignore si SKIP_SONAR=true (debug).
         // ────────────────────────────────────────────────────────────
         stage('6 - SonarQube Analysis') {
             when {
                 expression { return !params.SKIP_SONAR }
             }
             environment {
-                SCANNER_HOME = tool 'SonarScanner'
+                // Resout le chemin d'installation de SonarScanner
+                // depuis l'outil configure dans Manage Jenkins > Tools.
+                // Le nom 'SonarScanner' doit correspondre EXACTEMENT
+                // au nom configure dans Jenkins.
+                SCANNER_HOME = tool name: 'SonarScanner', type: 'hudson.plugins.sonar.SonarRunnerInstallation'
             }
             steps {
                 echo "[INFO] Lancement de l'analyse SonarQube..."
                 echo "[INFO] Projet : enterprise-iso-compliance | Build : ${env.BUILD_NUMBER}"
-                withSonarQubeEnv('SonarQube') {
-                    bat "\"${SCANNER_HOME}\\bin\\sonar-scanner.bat\" -Dsonar.projectVersion=1.0.${env.BUILD_NUMBER}"
+                echo "[INFO] Scanner : ${SCANNER_HOME}"
+
+                // FIX PRINCIPAL : executer depuis la racine du workspace
+                // pour que sonar-project.properties soit trouve.
+                // withSonarQubeEnv injecte SONAR_HOST_URL et SONAR_AUTH_TOKEN.
+                dir("${WORKSPACE}") {
+                    withSonarQubeEnv('SonarQube') {
+                        bat "\"${SCANNER_HOME}\\bin\\sonar-scanner.bat\" -Dsonar.projectVersion=1.0.${env.BUILD_NUMBER}"
+                    }
                 }
                 echo "[OK] Analyse SonarQube soumise avec succes."
             }
@@ -209,9 +246,17 @@ pipeline {
 
         // ────────────────────────────────────────────────────────────
         // STAGE 7 · Quality Gate
+        //
         // Attend le resultat du Quality Gate SonarQube.
-        // Abandonne le pipeline si le seuil qualite n'est pas atteint.
-        // Timeout : 10 minutes (analyse serveur SonarQube).
+        // Le plugin SonarQube Scanner pour Jenkins recupere le resultat
+        // via le webhook configure dans SonarQube :
+        //   Administration > Configuration > Webhooks
+        //   URL : http://JENKINS_URL/sonarqube-webhook/
+        //
+        // abortPipeline:true = le pipeline echoue si QG = FAILED.
+        // Timeout de 10 minutes pour eviter un blocage indefini.
+        //
+        // CONDITION : ignore si SKIP_SONAR=true.
         // ────────────────────────────────────────────────────────────
         stage('7 - Quality Gate') {
             when {
@@ -228,6 +273,7 @@ pipeline {
 
         // ────────────────────────────────────────────────────────────
         // STAGE 8 · ML Training
+        //
         // Entraine les modeles ML (RandomForest, LogisticRegression,
         // GradientBoosting, BiLSTM) pour les standards selectionnes.
         // Script : ci/train_standard.py <STANDARD>
@@ -235,7 +281,7 @@ pipeline {
         // ────────────────────────────────────────────────────────────
         stage('8 - ML Training') {
             steps {
-                echo "[INFO] Entrainement ML — standard=${params.STANDARD}..."
+                echo "[INFO] Entrainement ML - standard=${params.STANDARD}..."
                 dir("${BACKEND_DIR}") {
                     script {
                         def std = params.STANDARD
@@ -259,6 +305,7 @@ pipeline {
 
         // ────────────────────────────────────────────────────────────
         // STAGE 9 · Export Metriques
+        //
         // Exporte les metriques d'evaluation vers :
         //   artifacts/prometheus_metrics.txt
         //   artifacts/evaluation_summary.json
@@ -284,6 +331,7 @@ pipeline {
 
         // ────────────────────────────────────────────────────────────
         // STAGE 10 · TrainingJob Update
+        //
         // Met a jour l'enregistrement TrainingJob en base de donnees
         // avec les metriques du pipeline (F1, accuracy, drift, version).
         // Script : ci/update_training_job.py
@@ -300,8 +348,9 @@ pipeline {
 
         // ────────────────────────────────────────────────────────────
         // STAGE 11 · Cleanup
+        //
         // Supprime les repertoires __pycache__ generes durant le build
-        // pour maintenir un espace de travail propre.
+        // pour maintenir un espace de travail propre entre les builds.
         // ────────────────────────────────────────────────────────────
         stage('11 - Cleanup') {
             steps {
@@ -321,6 +370,7 @@ pipeline {
     }
     // ════════════════════════════════════════════════════════════════
 
+    // ── Post-build actions ──────────────────────────────────────────
     post {
         success {
             echo "========================================================="
@@ -340,10 +390,10 @@ pipeline {
             echo "========================================================="
         }
         unstable {
-            echo "[WARN] Pipeline UNSTABLE — Build #${env.BUILD_NUMBER} | Verifier les tests et le Quality Gate."
+            echo "[WARN] Pipeline UNSTABLE - Build #${env.BUILD_NUMBER} | Verifier les tests et le Quality Gate."
         }
         always {
-            echo "[INFO] Pipeline termine — Build #${env.BUILD_NUMBER} | Duree : ${currentBuild.durationString}"
+            echo "[INFO] Pipeline termine - Build #${env.BUILD_NUMBER} | Duree : ${currentBuild.durationString}"
         }
     }
 }
