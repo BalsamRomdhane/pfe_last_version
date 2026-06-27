@@ -975,10 +975,33 @@ function ComparisonTab({ data, loading }) {
   const handleTrigger = async (standard) => {
     setTriggerLoading(p => ({ ...p, [standard]: true }));
     try {
+      // Try Jenkins pipeline first
       const r = await api.post('/ml/trigger-training/', { standard, force: true });
       setTriggerResult(p => ({ ...p, [standard]: r.data }));
     } catch (e) {
-      setTriggerResult(p => ({ ...p, [standard]: { error: e?.response?.data?.error || 'Erreur' } }));
+      const data = e?.response?.data;
+      const status = e?.response?.status;
+      // 503 = Jenkins not configured → fallback to local training
+      if (status === 503 || (data && !data.triggered)) {
+        try {
+          const localR = await api.post('/ml/train/', { standard, norm_name: standard });
+          setTriggerResult(p => ({
+            ...p,
+            [standard]: {
+              triggered: true,
+              reason: 'Local training started (Jenkins not configured)',
+              local: true,
+              ...localR.data,
+            },
+          }));
+        } catch (localErr) {
+          const localMsg = localErr?.response?.data?.error || localErr?.message || 'Local training failed';
+          setTriggerResult(p => ({ ...p, [standard]: { error: localMsg } }));
+        }
+      } else {
+        const msg = data?.reason || data?.error || data?.message || 'Trigger failed';
+        setTriggerResult(p => ({ ...p, [standard]: { error: msg } }));
+      }
     } finally {
       setTriggerLoading(p => ({ ...p, [standard]: false }));
     }
@@ -1048,11 +1071,21 @@ function ComparisonTab({ data, loading }) {
                       disabled={triggerLoading[cfg.standard]}
                       className="inline-flex items-center gap-1 rounded-full bg-sky-600 px-3 py-1 text-[10px] font-semibold text-white hover:bg-sky-500 disabled:opacity-50"
                     >
-                      <Play size={10} /> {triggerLoading[cfg.standard] ? 'En cours…' : 'Réentraîner'}
+                      <Play size={10} /> {triggerLoading[cfg.standard] ? 'En cours...' : 'Reentrainer'}
                     </button>
                     {triggerResult[cfg.standard] && (
-                      <p className={`mt-1 text-[10px] ${triggerResult[cfg.standard].error ? 'text-rose-600' : 'text-emerald-600'}`}>
-                        {triggerResult[cfg.standard].error || (triggerResult[cfg.standard].triggered ? '✓ Déclenché' : triggerResult[cfg.standard].reason)}
+                      <p className={`mt-1 text-[10px] ${
+                        triggerResult[cfg.standard].error
+                          ? 'text-rose-600'
+                          : triggerResult[cfg.standard].triggered
+                            ? 'text-emerald-600'
+                            : 'text-amber-600'
+                      }`}>
+                        {triggerResult[cfg.standard].error
+                          ? `✗ ${triggerResult[cfg.standard].error}`
+                          : triggerResult[cfg.standard].triggered
+                            ? `✓ ${triggerResult[cfg.standard].local ? 'Local' : 'Jenkins'} declenche`
+                            : `⚠ ${triggerResult[cfg.standard].reason}`}
                       </p>
                     )}
                   </td>
