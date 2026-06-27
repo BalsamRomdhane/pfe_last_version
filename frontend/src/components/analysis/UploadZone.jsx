@@ -1,6 +1,6 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { UploadCloud, FileText, X, CheckCircle2, File } from 'lucide-react';
+import { UploadCloud, X, CheckCircle2 } from 'lucide-react';
 
 const ACCEPTED = ['.pdf', '.doc', '.docx'];
 const MAX_MB = 50;

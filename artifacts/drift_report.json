@@ -1,0 +1,53 @@
+{
+  "ISO 27001 - Securite de l information": {
+    "drift_score": 0.297,
+    "total_samples": 34722,
+    "historical_count": 24305,
+    "recent_count": 10417,
+    "cosine_similarity": 0.7029533522402764,
+    "historical_distribution": {
+      "approved_pct": 58.8,
+      "rejected_pct": 41.2
+    },
+    "recent_distribution": {
+      "approved_pct": 36.1,
+      "rejected_pct": 63.9
+    },
+    "status": "warning",
+    "computed_at": "2026-06-24T21:01:48.594854+00:00"
+  },
+  "TISAX - Information Security Assessment": {
+    "drift_score": 0.3211,
+    "total_samples": 33721,
+    "historical_count": 23604,
+    "recent_count": 10117,
+    "cosine_similarity": 0.6789430287441238,
+    "historical_distribution": {
+      "approved_pct": 59.0,
+      "rejected_pct": 41.0
+    },
+    "recent_distribution": {
+      "approved_pct": 36.8,
+      "rejected_pct": 63.2
+    },
+    "status": "critical",
+    "computed_at": "2026-06-24T21:01:49.684914+00:00"
+  },
+  "ISO 9001 - Controle et validation des documents": {
+    "drift_score": 0.1795,
+    "total_samples": 711,
+    "historical_count": 497,
+    "recent_count": 214,
+    "cosine_similarity": 0.820498671759988,
+    "historical_distribution": {
+      "approved_pct": 70.2,
+      "rejected_pct": 29.8
+    },
+    "recent_distribution": {
+      "approved_pct": 38.3,
+      "rejected_pct": 61.7
+    },
+    "status": "warning",
+    "computed_at": "2026-06-24T21:01:49.719662+00:00"
+  }
+}

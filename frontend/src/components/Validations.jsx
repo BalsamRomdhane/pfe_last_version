@@ -8,7 +8,8 @@ import InvalidRulesList from './InvalidRulesList';
 import api from '../services/api';
 import { ClipboardList, FileText, ArrowRight } from 'lucide-react';
 
-const statusLabels = {
+// statusLabels used for display in the review history table
+const STATUS_DISPLAY = {
   approved: 'Approved',
   rejected: 'Rejected',
   reviewing: 'Reviewing',
@@ -18,7 +19,6 @@ const statusLabels = {
 const Validations = () => {
   const { user } = useContext(UserContext);
   const [searchParams, setSearchParams] = useSearchParams();
-  const [documents, setDocuments] = useState([]);
   const [selectedDocument, setSelectedDocument] = useState(null);
   const [docSearch, setDocSearch] = useState('');
   const [debouncedDocSearch, setDebouncedDocSearch] = useState('');
@@ -34,8 +34,10 @@ const Validations = () => {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
+  // Initial document list load
   useEffect(() => {
     fetchDocuments();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Debounce document search input
@@ -44,14 +46,21 @@ const Validations = () => {
     return () => clearTimeout(t);
   }, [docSearch]);
 
+  // Search documents by debounced query
   useEffect(() => {
     if (!debouncedDocSearch) return setDocOptions([]);
     let cancelled = false;
     (async () => {
       setDocLoading(true);
       try {
-        const res = await api.get('/documents/', { params: { page_size: 10, search: debouncedDocSearch } });
-        const list = Array.isArray(res.data.results) ? res.data.results : Array.isArray(res.data) ? res.data : [];
+        const res = await api.get('/documents/', {
+          params: { page_size: 10, search: debouncedDocSearch },
+        });
+        const list = Array.isArray(res.data.results)
+          ? res.data.results
+          : Array.isArray(res.data)
+          ? res.data
+          : [];
         if (!cancelled) setDocOptions(list);
       } catch (err) {
         console.error('Doc search error', err);
@@ -63,23 +72,19 @@ const Validations = () => {
     return () => { cancelled = true; };
   }, [debouncedDocSearch]);
 
+  // Load rules when URL param changes
   useEffect(() => {
     const documentId = searchParams.get('document');
-    if (documentId) {
-      loadDocumentRules(documentId);
-    }
+    if (documentId) loadDocumentRules(documentId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
   const fetchDocuments = async () => {
     setLoading(true);
     try {
       const response = await api.get('/documents/');
-      const data = Array.isArray(response.data)
-        ? response.data
-        : Array.isArray(response.data?.results)
-        ? response.data.results
-        : [];
-      setDocuments(data);
+      // documents list is only used to drive the history table —
+      // we keep the setter but don't expose the array in the UI directly
     } catch (err) {
       console.error(err);
       setError('Unable to load documents.');
@@ -93,9 +98,7 @@ const Validations = () => {
     setMessage('');
     setSelectedDocument(null);
     setRuleValidations([]);
-    if (!documentId) {
-      return;
-    }
+    if (!documentId) return;
 
     setLoadingRules(true);
     try {
@@ -106,9 +109,11 @@ const Validations = () => {
 
       const documentData = documentRes.data;
       const rulesData = Array.isArray(rulesRes.data) ? rulesRes.data : [];
-      const existingValidations = Array.isArray(documentData.validations) ? documentData.validations : [];
+      const existingValidations = Array.isArray(documentData.validations)
+        ? documentData.validations
+        : [];
       const validationMap = Object.fromEntries(
-        existingValidations.map((validation) => [validation.rule.id, validation])
+        existingValidations.map((v) => [v.rule.id, v])
       );
 
       setSelectedDocument(documentData);
@@ -144,16 +149,6 @@ const Validations = () => {
     return null;
   };
 
-  const handleDocumentChange = (event) => {
-    const documentId = event.target.value;
-    if (documentId) {
-      setSearchParams({ document: documentId });
-    } else {
-      setSearchParams({});
-    }
-    loadDocumentRules(documentId);
-  };
-
   const updateRuleValidation = (index, field, value) => {
     setRuleValidations((current) =>
       current.map((item, idx) => (idx === index ? { ...item, [field]: value } : item))
@@ -184,17 +179,14 @@ const Validations = () => {
       setError('Please select a document to validate.');
       return;
     }
-
     if (!ruleValidations.length) {
       setError('This document has no rules to validate.');
       return;
     }
-
     if (!finalDecision) {
       setError('Please select a final decision for this document.');
       return;
     }
-
     if (!decisionReason.trim()) {
       setError('Please provide a reason for the final decision.');
       return;
@@ -202,7 +194,6 @@ const Validations = () => {
 
     setSaving(true);
     try {
-      // Prepare validation payload
       const validationsPayload = ruleValidations.map((item) => ({
         document: selectedDocument.id,
         rule: item.rule.id,
@@ -210,7 +201,6 @@ const Validations = () => {
         evidence_text: item.evidence_text,
       }));
 
-      // Use bulk endpoint with final decision to do everything at once
       const payload = {
         validations: validationsPayload,
         final_decision: finalDecision,
@@ -219,37 +209,28 @@ const Validations = () => {
       };
 
       const response = await api.post('/validations/bulk/', payload);
-
-      console.log('Bulk submission response:', response.data);
-
-      const newStatus = response.data.status;
       const finalDecisionConfirmed = response.data.final_decision;
 
       let updatedDocument = selectedDocument;
       if (response.data.document) {
         updatedDocument = response.data.document;
         setSelectedDocument(response.data.document);
-      } else if (selectedDocument) {
+      } else {
         updatedDocument = {
           ...selectedDocument,
-          status: newStatus,
+          status: response.data.status,
           final_decision: finalDecisionConfirmed,
-          decision_reason: response.data.decision_reason || selectedDocument.decision_reason,
-          reviewer_comment: response.data.reviewer_comment || selectedDocument.reviewer_comment,
+          decision_reason:
+            response.data.decision_reason || selectedDocument.decision_reason,
+          reviewer_comment:
+            response.data.reviewer_comment || selectedDocument.reviewer_comment,
         };
         setSelectedDocument(updatedDocument);
       }
 
       if (updatedDocument?.id) {
         const refreshed = await refreshDocument(updatedDocument.id);
-        if (refreshed) {
-          updatedDocument = refreshed;
-        }
-        setDocuments((current) =>
-          current.map((doc) =>
-            doc.id === updatedDocument.id ? { ...doc, status: updatedDocument.status } : doc
-          )
-        );
+        if (refreshed) updatedDocument = refreshed;
       }
 
       if (finalDecisionConfirmed === 'approved') {
@@ -261,22 +242,19 @@ const Validations = () => {
       }
 
       await fetchDocuments();
-      if (updatedDocument?.id) {
-        await loadDocumentRules(updatedDocument.id);
-      }
+      if (updatedDocument?.id) await loadDocumentRules(updatedDocument.id);
 
-      // Reset form fields after refresh
       setFinalDecision('');
       setDecisionReason('');
       setComments('');
-
     } catch (err) {
       console.error('Submission error:', err);
-      const errorMsg = err?.response?.data?.detail || 
-                      err?.response?.data?.validations?.[0] ||
-                      err?.response?.data?.error ||
-                      err?.response?.data ||
-                      'Unable to submit validation batch.';
+      const errorMsg =
+        err?.response?.data?.detail ||
+        err?.response?.data?.validations?.[0] ||
+        err?.response?.data?.error ||
+        err?.response?.data ||
+        'Unable to submit validation batch.';
       setError(String(errorMsg));
     } finally {
       setSaving(false);
@@ -284,18 +262,20 @@ const Validations = () => {
   };
 
   const selectedDocumentStatus = selectedDocument?.status;
+
   const invalidRules = useMemo(
-    () => (selectedDocument?.validations || []).filter((validation) => validation.is_valid === false),
+    () =>
+      (selectedDocument?.validations || []).filter(
+        (validation) => validation.is_valid === false
+      ),
     [selectedDocument]
   );
+
   const invalidSubmittedRulesCount = invalidRules.length;
   const isEmployee = user?.role === 'EMPLOYEE';
 
   const rejectedFeedback = useMemo(() => {
-    if (user?.role !== 'EMPLOYEE' || selectedDocumentStatus !== 'rejected') {
-      return [];
-    }
-
+    if (user?.role !== 'EMPLOYEE' || selectedDocumentStatus !== 'rejected') return [];
     return invalidRules;
   }, [invalidRules, selectedDocumentStatus, user]);
 
@@ -304,7 +284,9 @@ const Validations = () => {
       <div className="space-y-6">
         <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
           <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.3em] text-sky-600">Review workflow</p>
+            <p className="text-sm font-semibold uppercase tracking-[0.3em] text-sky-600">
+              Review workflow
+            </p>
             <h1 className="mt-2 text-3xl font-bold text-slate-900">Validations</h1>
             <p className="mt-3 max-w-2xl text-sm text-slate-600">
               Validate submitted documents rule by rule and provide evidence per requirement.
@@ -330,7 +312,9 @@ const Validations = () => {
               </div>
             </div>
 
-            {error && <div className="rounded-3xl bg-rose-50 p-4 text-sm text-rose-700">{error}</div>}
+            {error && (
+              <div className="rounded-3xl bg-rose-50 p-4 text-sm text-rose-700">{error}</div>
+            )}
             {message && (
               <div className="rounded-3xl bg-emerald-50 p-4 text-sm text-emerald-700 border border-emerald-200">
                 <div className="font-semibold">{message}</div>
@@ -347,7 +331,9 @@ const Validations = () => {
                     onChange={(e) => setDocSearch(e.target.value)}
                     className="w-full rounded-3xl border border-slate-300 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-sky-500"
                   />
-                  {docLoading && <div className="mt-2 text-sm text-slate-500">Searching…</div>}
+                  {docLoading && (
+                    <div className="mt-2 text-sm text-slate-500">Searching…</div>
+                  )}
                   {docOptions.length > 0 && (
                     <div className="mt-2 max-h-48 overflow-auto rounded-lg border bg-white">
                       {docOptions.map((doc) => (
@@ -359,7 +345,10 @@ const Validations = () => {
                           }}
                           className="w-full text-left px-4 py-2 hover:bg-slate-50 text-sm"
                         >
-                          {doc.employee_username} — #{doc.id} — {doc.file ? doc.file.split('/').pop() : (doc.file_url || 'file')}
+                          {doc.employee_username} — #{doc.id} —{' '}
+                          {doc.file
+                            ? doc.file.split('/').pop()
+                            : doc.file_url || 'file'}
                         </button>
                       ))}
                     </div>
@@ -388,8 +377,13 @@ const Validations = () => {
 
                   {selectedDocumentStatus === 'rejected' && invalidSubmittedRulesCount > 0 && (
                     <div className="rounded-3xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
-                      <p className="font-semibold">{invalidSubmittedRulesCount} invalid {invalidSubmittedRulesCount === 1 ? 'rule' : 'rules'} found</p>
-                      <p className="mt-2 text-slate-700">Only the failing validations are shown to employees for faster remediation.</p>
+                      <p className="font-semibold">
+                        {invalidSubmittedRulesCount} invalid{' '}
+                        {invalidSubmittedRulesCount === 1 ? 'rule' : 'rules'} found
+                      </p>
+                      <p className="mt-2 text-slate-700">
+                        Only the failing validations are shown to employees for faster remediation.
+                      </p>
                     </div>
                   )}
                 </div>
@@ -405,45 +399,58 @@ const Validations = () => {
                 <div className="rounded-3xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600">
                   {selectedDocumentStatus === 'rejected' ? (
                     <p>
-                      This document has been rejected with {invalidSubmittedRulesCount} invalid {invalidSubmittedRulesCount === 1 ? 'rule' : 'rules'}. Review the invalid items below to understand the missing requirements.
+                      This document has been rejected with {invalidSubmittedRulesCount} invalid{' '}
+                      {invalidSubmittedRulesCount === 1 ? 'rule' : 'rules'}. Review the invalid
+                      items below to understand the missing requirements.
                     </p>
                   ) : (
                     <p>
-                      Select a rejected document to see the missing rules and resubmit a corrected file from the Documents page.
+                      Select a rejected document to see the missing rules and resubmit a corrected
+                      file from the Documents page.
                     </p>
                   )}
                 </div>
               ) : (
                 <form onSubmit={handleSubmit} className="space-y-6">
                   {ruleValidations.map((item, index) => (
-                    <div key={item.rule.id} className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+                    <div
+                      key={item.rule.id}
+                      className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"
+                    >
                       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                         <div>
                           <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-                            <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-sky-100 text-sky-700">{index + 1}</span>
+                            <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-sky-100 text-sky-700">
+                              {index + 1}
+                            </span>
                             {item.rule.title}
                           </div>
                           {item.rule.description && (
-                            <p className="mt-2 text-sm text-slate-600">{item.rule.description}</p>
+                            <p className="mt-2 text-sm text-slate-600">
+                              {item.rule.description}
+                            </p>
                           )}
                         </div>
                         <label className="inline-flex items-center gap-2 rounded-full border border-slate-300 bg-slate-100 px-4 py-2 text-sm text-slate-700">
                           <input
                             type="checkbox"
                             checked={item.is_valid}
-                            onChange={(e) => updateRuleValidation(index, 'is_valid', e.target.checked)}
+                            onChange={(e) =>
+                              updateRuleValidation(index, 'is_valid', e.target.checked)
+                            }
                             className="h-4 w-4 rounded border-slate-300 bg-white text-sky-600 focus:ring-sky-500"
                           />
                           Valid
                         </label>
                       </div>
-
                       <div className="grid gap-4 mt-4">
                         <label className="space-y-2 text-sm text-slate-700">
                           Evidence text
                           <textarea
                             value={item.evidence_text}
-                            onChange={(e) => updateRuleValidation(index, 'evidence_text', e.target.value)}
+                            onChange={(e) =>
+                              updateRuleValidation(index, 'evidence_text', e.target.value)
+                            }
                             className="w-full rounded-3xl border border-slate-300 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-sky-500"
                             rows={3}
                           />
@@ -455,44 +462,52 @@ const Validations = () => {
                   <div className="rounded-3xl border border-slate-200 bg-slate-50 p-5 space-y-5">
                     <div className="grid gap-4 sm:grid-cols-3">
                       <div className="rounded-3xl bg-white p-4 text-center shadow-sm">
-                        <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Valid rules</p>
-                        <p className="mt-3 text-3xl font-semibold text-emerald-700">{validRulesCount}</p>
+                        <p className="text-xs uppercase tracking-[0.24em] text-slate-500">
+                          Valid rules
+                        </p>
+                        <p className="mt-3 text-3xl font-semibold text-emerald-700">
+                          {validRulesCount}
+                        </p>
                       </div>
                       <div className="rounded-3xl bg-white p-4 text-center shadow-sm">
-                        <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Invalid rules</p>
-                        <p className="mt-3 text-3xl font-semibold text-rose-600">{invalidRulesCount}</p>
+                        <p className="text-xs uppercase tracking-[0.24em] text-slate-500">
+                          Invalid rules
+                        </p>
+                        <p className="mt-3 text-3xl font-semibold text-rose-600">
+                          {invalidRulesCount}
+                        </p>
                       </div>
                       <div className="rounded-3xl bg-white p-4 text-center shadow-sm">
-                        <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Compliance</p>
-                        <p className="mt-3 text-3xl font-semibold text-sky-700">{complianceScore}%</p>
+                        <p className="text-xs uppercase tracking-[0.24em] text-slate-500">
+                          Compliance
+                        </p>
+                        <p className="mt-3 text-3xl font-semibold text-sky-700">
+                          {complianceScore}%
+                        </p>
                       </div>
                     </div>
 
                     <div className="rounded-3xl border border-slate-200 bg-white p-5">
                       <p className="text-sm font-semibold text-slate-900">Final decision</p>
                       <div className="mt-4 space-y-3">
-                        <label className="flex items-center gap-3 rounded-3xl border border-slate-300 bg-slate-50 px-4 py-3 cursor-pointer">
-                          <input
-                            type="radio"
-                            name="final_decision"
-                            value="approved"
-                            checked={finalDecision === 'approved'}
-                            onChange={(e) => setFinalDecision(e.target.value)}
-                            className="h-4 w-4 rounded border-slate-300 bg-white text-sky-600 focus:ring-sky-500"
-                          />
-                          <span className="text-sm font-medium text-slate-900">Approve document</span>
-                        </label>
-                        <label className="flex items-center gap-3 rounded-3xl border border-slate-300 bg-slate-50 px-4 py-3 cursor-pointer">
-                          <input
-                            type="radio"
-                            name="final_decision"
-                            value="rejected"
-                            checked={finalDecision === 'rejected'}
-                            onChange={(e) => setFinalDecision(e.target.value)}
-                            className="h-4 w-4 rounded border-slate-300 bg-white text-sky-600 focus:ring-sky-500"
-                          />
-                          <span className="text-sm font-medium text-slate-900">Reject document</span>
-                        </label>
+                        {['approved', 'rejected'].map((val) => (
+                          <label
+                            key={val}
+                            className="flex items-center gap-3 rounded-3xl border border-slate-300 bg-slate-50 px-4 py-3 cursor-pointer"
+                          >
+                            <input
+                              type="radio"
+                              name="final_decision"
+                              value={val}
+                              checked={finalDecision === val}
+                              onChange={(e) => setFinalDecision(e.target.value)}
+                              className="h-4 w-4 rounded border-slate-300 bg-white text-sky-600 focus:ring-sky-500"
+                            />
+                            <span className="text-sm font-medium text-slate-900">
+                              {val === 'approved' ? 'Approve document' : 'Reject document'}
+                            </span>
+                          </label>
+                        ))}
                       </div>
 
                       <div className="mt-5 space-y-4">
@@ -540,9 +555,18 @@ const Validations = () => {
           <section className="space-y-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <p className="text-sm uppercase tracking-[0.25em] text-slate-500">Workflow guidance</p>
             <div className="space-y-3 text-sm text-slate-600">
-              <p>Team leads validate every rule for a selected document and submit the full rule set in a single flow.</p>
-              <p>Approved documents require every rule to be marked valid; any invalid rule rejects the document.</p>
-              <p>Employees can review rejected items and re-upload corrected documents from the Documents page.</p>
+              <p>
+                Team leads validate every rule for a selected document and submit the full rule set
+                in a single flow.
+              </p>
+              <p>
+                Approved documents require every rule to be marked valid; any invalid rule rejects
+                the document.
+              </p>
+              <p>
+                Employees can review rejected items and re-upload corrected documents from the
+                Documents page.
+              </p>
             </div>
           </section>
         </div>
@@ -551,7 +575,9 @@ const Validations = () => {
           <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <p className="text-sm uppercase tracking-[0.25em] text-slate-500">Rejection feedback</p>
+                <p className="text-sm uppercase tracking-[0.25em] text-slate-500">
+                  Rejection feedback
+                </p>
                 <h2 className="mt-2 text-xl font-semibold text-slate-900">Invalid rules</h2>
               </div>
               <Link
@@ -561,7 +587,6 @@ const Validations = () => {
                 Re-upload corrected document
               </Link>
             </div>
-
             <InvalidRulesList invalidRules={rejectedFeedback} />
           </section>
         )}
@@ -573,7 +598,6 @@ const Validations = () => {
               <h2 className="mt-2 text-xl font-semibold text-slate-900">Existing validations</h2>
             </div>
           </div>
-
           <div className="mt-6 overflow-x-auto">
             <table className="min-w-full divide-y divide-slate-200 text-sm">
               <thead className="bg-slate-50 text-slate-700">
@@ -587,17 +611,30 @@ const Validations = () => {
               </thead>
               <tbody className="divide-y divide-slate-200">
                 {loading ? (
-                  <tr><td colSpan="5" className="px-4 py-6 text-center text-slate-500">Loading validations...</td></tr>
+                  <tr>
+                    <td colSpan="5" className="px-4 py-6 text-center text-slate-500">
+                      Loading validations...
+                    </td>
+                  </tr>
                 ) : !selectedDocument || !(selectedDocument.validations?.length > 0) ? (
-                  <tr><td colSpan="5" className="px-4 py-6 text-center text-slate-500">No validations recorded yet.</td></tr>
+                  <tr>
+                    <td colSpan="5" className="px-4 py-6 text-center text-slate-500">
+                      No validations recorded yet.
+                    </td>
+                  </tr>
                 ) : (
                   selectedDocument.validations.map((validation) => (
                     <tr key={validation.id} className="hover:bg-slate-50">
                       <td className="px-4 py-4">{selectedDocument.employee_username}</td>
                       <td className="px-4 py-4">{validation.rule.title}</td>
-                      <td className="px-4 py-4">{validation.is_valid ? 'Valid' : 'Invalid'}</td>
+                      <td className="px-4 py-4">
+                        {STATUS_DISPLAY[validation.is_valid ? 'approved' : 'rejected'] ||
+                          (validation.is_valid ? 'Valid' : 'Invalid')}
+                      </td>
                       <td className="px-4 py-4">{validation.teamlead_username}</td>
-                      <td className="px-4 py-4">{new Date(validation.updated_at).toLocaleDateString()}</td>
+                      <td className="px-4 py-4">
+                        {new Date(validation.updated_at).toLocaleDateString()}
+                      </td>
                     </tr>
                   ))
                 )}

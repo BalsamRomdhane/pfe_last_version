@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "name": "Auto-push Jenkinsfile",
+  "description": "Dès que le Jenkinsfile est modifié, stage + commit + push automatiquement sur origin/main",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "Jenkinsfile"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "Le Jenkinsfile vient d'être modifié. Effectue immédiatement les commandes suivantes dans le répertoire c:\\Users\\balsa\\lastversion :\n1. git add Jenkinsfile\n2. git commit -m \"fix(jenkins): update Jenkinsfile\"\n3. git push -u origin main\nAffiche le résultat de chaque commande."
+  }
+}

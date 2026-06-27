@@ -256,7 +256,7 @@ class MLOpsConfig(models.Model):
     current_model_version = models.CharField(max_length=100, blank=True, default='')
     last_model_version = models.CharField(max_length=100, blank=True, default='',
                                           help_text='Alias kept for backwards compatibility')
-    retraining_threshold = models.PositiveIntegerField(default=1)
+    retraining_threshold = models.PositiveIntegerField(default=10)
     auto_trigger_enabled = models.BooleanField(default=False)
     training_count = models.PositiveIntegerField(default=0, help_text='Total number of completed training runs')
     dataset_size = models.PositiveIntegerField(default=0, help_text='Number of samples at last training run')

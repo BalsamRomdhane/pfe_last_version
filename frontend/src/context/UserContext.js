@@ -16,7 +16,6 @@ const getStoredProfile = () => {
 
 const buildUserFromToken = (tokenValue, profile) => {
   const decoded = jwtDecode(tokenValue);
-
   let role = profile?.role || null;
   if (!role) {
     role = decoded.realm_access?.roles?.[0] || null;
@@ -72,7 +71,6 @@ export const UserProvider = ({ children }) => {
       }
 
       try {
-        const decoded = jwtDecode(token);
         const nextUser = buildUserFromToken(token, userProfile);
 
         if (isMounted) {

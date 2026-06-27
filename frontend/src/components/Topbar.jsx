@@ -5,7 +5,7 @@ import { useNotifications } from '../context/NotificationContext';
 import {
   Bell, Search, Menu, ChevronDown, LogOut, X,
   CheckCheck, AlertTriangle, CheckCircle, XCircle,
-  Clock, TrendingDown, Info, Shield,
+  Clock, TrendingDown, Info,
 } from 'lucide-react';
 
 // ── Notification type config ──────────────────────────────────────────────────

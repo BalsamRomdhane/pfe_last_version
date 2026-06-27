@@ -80,6 +80,14 @@ for mf in metrics_files:
 
     standard_key = norm.name if norm else os.path.basename(mf).replace('_metrics.json', '')
 
+    # Build a clean model_version string:
+    # - With real Jenkins: "RandomForest v42" (BUILD_NUMBER=42)
+    # - Without Jenkins (local): "RandomForest" (no build number prefix)
+    if build_id and build_id != '0':
+        model_version_str = '%s v%s' % (best_model, build_id)
+    else:
+        model_version_str = best_model  # local training: just the algorithm name
+
     job = TrainingJob.objects.create(
         standard=standard_key,
         status='success',
@@ -91,10 +99,10 @@ for mf in metrics_files:
         precision_score=float(bm.get('precision', 0.0)),
         recall_score=float(bm.get('recall', 0.0)),
         avg_similarity=float(bm.get('accuracy', 0.0)),
-        model_version='jenkins-%s-%s' % (build_id, best_model),
-        jenkins_build_id=build_id,
+        model_version=model_version_str,
+        jenkins_build_id=build_id if build_id != '0' else '',
         jenkins_url=build_url,
-        triggered_by='jenkins',
+        triggered_by='jenkins' if build_id != '0' else 'local',
         drift_report=data.get('dataset_quality', {}),
         log_output='Build #%s | %s | best=%s' % (build_id, standard_key, best_model),
     )
@@ -104,7 +112,7 @@ for mf in metrics_files:
         defaults={
             'last_trained_at': timezone.now(),
             'last_trained_doc_count': samples,
-            'current_model_version': 'jenkins-%s-%s' % (build_id, best_model),
+            'current_model_version': model_version_str,
             'last_f1_score': float(bm.get('f1_score', 0.0)),
         }
     )

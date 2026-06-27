@@ -86,11 +86,12 @@ const Users = () => {
     }
   };
 
+  // eslint-disable-next-line no-unused-vars
   const getSubmitError = (err) => {
     const detail = err?.response?.data?.detail;
-    const error = err?.response?.data?.error;
+    const errMsg = err?.response?.data?.error;
     if (typeof detail === 'string' && detail.trim()) return detail;
-    if (typeof error === 'string' && error.trim()) return error;
+    if (typeof errMsg === 'string' && errMsg.trim()) return errMsg;
     if (detail && typeof detail === 'object') return JSON.stringify(detail);
     return err?.message || 'Unable to save user. Please try again.';
   };
@@ -103,11 +104,7 @@ const Users = () => {
       if (selectedUser) {
         await api.put(`/rbac/users/${selectedUser.id}/`, payload);
       } else {
-        const response = await api.post('/rbac/users/', payload);
-        const generatedPassword = response.data?.generated_password;
-        const keycloakWarning = response.data?.keycloak_created === false
-          ? ' (Keycloak creation may have failed.)'
-          : '';
+        await api.post('/rbac/users/', payload);
       }
       setModalOpen(false);
       setSelectedUser(null);

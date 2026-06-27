@@ -26,21 +26,185 @@ JENKINS_JOB_NAME = os.getenv('JENKINS_JOB_NAME', 'compliance-ml-pipeline')
 RETRAINING_THRESHOLD = int(os.getenv('MLOPS_RETRAINING_THRESHOLD', '10'))
 
 
-# ── Document counting ─────────────────────────────────────────────────────────
+# ── Jenkins Health Service ────────────────────────────────────────────────────
+def get_jenkins_health() -> Dict[str, Any]:
+    """
+    Perform a real health check against Jenkins.
+
+    Returns a structured status object with five distinct states:
+
+    1. not_configured  — JENKINS_TOKEN is empty → local training only
+    2. unreachable     — token set but Jenkins host doesn't respond
+    3. auth_failed     — Jenkins responds but credentials are wrong (401/403)
+    4. job_not_found   — authenticated but the configured job doesn't exist
+    5. connected       — fully operational, remote trigger available
+
+    The 'local_training' flag is always True: the ML pipeline can run
+    locally regardless of Jenkins availability.
+    """
+    _url   = os.getenv('JENKINS_URL',      JENKINS_URL).rstrip('/')
+    _user  = os.getenv('JENKINS_USER',     JENKINS_USER)
+    _token = os.getenv('JENKINS_TOKEN',    JENKINS_TOKEN)
+    _job   = os.getenv('JENKINS_JOB_NAME', JENKINS_JOB_NAME)
+
+    base = {
+        'local_training': True,   # always available
+        'checked_at': datetime.now(timezone.utc).isoformat(),
+        'jenkins_url': _url if _token else None,
+        'job_name': _job if _token else None,
+    }
+
+    # ── Case 1: token not set ─────────────────────────────────────────────
+    if not _token.strip():
+        return {
+            **base,
+            'configured': False,
+            'reachable': False,
+            'authenticated': False,
+            'connected': False,
+            'remote_trigger': False,
+            'version': None,
+            'status': 'not_configured',
+            'message': (
+                'Remote Jenkins API is not configured. '
+                'Local model training remains available.'
+            ),
+        }
+
+    # ── Case 2: reachability check ────────────────────────────────────────
+    try:
+        resp = requests.get(
+            f'{_url}/api/json',
+            auth=(_user, _token),
+            timeout=5,
+            headers={'Accept': 'application/json'},
+        )
+    except requests.exceptions.ConnectionError:
+        return {
+            **base,
+            'configured': True,
+            'reachable': False,
+            'authenticated': False,
+            'connected': False,
+            'remote_trigger': False,
+            'version': None,
+            'status': 'unreachable',
+            'message': (
+                'Unable to reach Jenkins. '
+                'Check server status or network connectivity.'
+            ),
+        }
+    except requests.exceptions.Timeout:
+        return {
+            **base,
+            'configured': True,
+            'reachable': False,
+            'authenticated': False,
+            'connected': False,
+            'remote_trigger': False,
+            'version': None,
+            'status': 'unreachable',
+            'message': 'Jenkins did not respond within 5 seconds.',
+        }
+    except Exception as exc:
+        return {
+            **base,
+            'configured': True,
+            'reachable': False,
+            'authenticated': False,
+            'connected': False,
+            'remote_trigger': False,
+            'version': None,
+            'status': 'error',
+            'message': f'Jenkins check failed: {exc}',
+        }
+
+    # ── Case 3: authentication check ─────────────────────────────────────
+    if resp.status_code in (401, 403):
+        return {
+            **base,
+            'configured': True,
+            'reachable': True,
+            'authenticated': False,
+            'connected': False,
+            'remote_trigger': False,
+            'version': None,
+            'status': 'auth_failed',
+            'message': (
+                'Unable to authenticate with Jenkins. '
+                'Verify JENKINS_USER and JENKINS_TOKEN.'
+            ),
+        }
+
+    # Extract Jenkins version from response header (present on all Jenkins responses)
+    version = resp.headers.get('X-Jenkins', None)
+
+    # ── Case 4: job existence check ───────────────────────────────────────
+    job_url = f'{_url}/job/{_job}/api/json'
+    try:
+        job_resp = requests.get(
+            job_url,
+            auth=(_user, _token),
+            timeout=5,
+            headers={'Accept': 'application/json'},
+        )
+        job_exists = job_resp.status_code == 200
+    except Exception:
+        job_exists = False
+
+    if not job_exists:
+        return {
+            **base,
+            'configured': True,
+            'reachable': True,
+            'authenticated': True,
+            'connected': False,
+            'remote_trigger': False,
+            'version': version,
+            'status': 'job_not_found',
+            'message': (
+                f'Connected to Jenkins, but the configured pipeline job '
+                f'"{_job}" was not found.'
+            ),
+        }
+
+    # ── Case 5: fully connected ───────────────────────────────────────────
+    return {
+        **base,
+        'configured': True,
+        'reachable': True,
+        'authenticated': True,
+        'connected': True,
+        'remote_trigger': True,
+        'version': version,
+        'status': 'connected',
+        'message': f'Jenkins connected · {_url} · job: {_job}',
+    }
+
+
+# ── Document/sample counting ─────────────────────────────────────────────────
 def count_new_documents(standard: str) -> Dict[str, Any]:
-    """Return count of documents added since last training for the given standard."""
-    from api.models import Document, MLOpsConfig
+    """Return count of labeled RuleTrainingSamples added since last training.
+
+    This is the authoritative "new docs" metric because the ML pipeline trains
+    on RuleTrainingSample rows, not on raw Document uploads.
+    The legacy 'total_documents' field is kept for backward compatibility.
+    """
+    from api.models import RuleTrainingSample, MLOpsConfig
 
     config, _ = MLOpsConfig.objects.get_or_create(
         standard=standard,
         defaults={'retraining_threshold': RETRAINING_THRESHOLD},
     )
 
-    qs = Document.objects.filter(norme__name__iexact=standard)
-    total = qs.count()
+    qs_labeled = RuleTrainingSample.objects.filter(
+        norm__name__iexact=standard,
+        label__in=['approved', 'rejected'],
+    )
+    total = qs_labeled.count()
 
     if config.last_trained_at:
-        new_docs = qs.filter(created_at__gt=config.last_trained_at).count()
+        new_docs = qs_labeled.filter(created_at__gt=config.last_trained_at).count()
     else:
         new_docs = total
 
@@ -51,12 +215,12 @@ def count_new_documents(standard: str) -> Dict[str, Any]:
 
     return {
         'standard': standard,
-        'total_documents': total,
+        'total_documents': total,       # labeled RuleTrainingSamples — pipeline training source
         'new_documents': new_docs,
         'last_trained_at': config.last_trained_at.isoformat() if config.last_trained_at else None,
         'threshold': config.retraining_threshold,
         'needs_training': needs_training,
-        'current_model_version': config.current_model_version,
+        'current_model_version': config.current_model_version or None,
     }
 
 
@@ -215,12 +379,26 @@ def update_job_result(job_id: int, payload: Dict[str, Any]) -> bool:
         return False
 
     job.status          = payload.get('status', 'failed')
-    job.f1_score        = payload.get('f1_score')
-    job.precision_score = payload.get('precision_score')
-    job.recall_score    = payload.get('recall_score')
-    job.drift_score     = payload.get('drift_score')
-    job.avg_similarity  = payload.get('avg_similarity')
-    job.model_version   = payload.get('model_version', '')
+    # Only update numeric metrics when payload provides non-None values
+    if payload.get('f1_score') is not None:
+        job.f1_score        = float(payload['f1_score'])
+    if payload.get('precision_score') is not None:
+        job.precision_score = float(payload['precision_score'])
+    if payload.get('recall_score') is not None:
+        job.recall_score    = float(payload['recall_score'])
+    if payload.get('drift_score') is not None:
+        job.drift_score     = float(payload['drift_score'])
+    if payload.get('avg_similarity') is not None:
+        job.avg_similarity  = float(payload['avg_similarity'])
+    if payload.get('accuracy') is not None:
+        job.accuracy        = float(payload['accuracy'])
+
+    # Clean model_version: strip "jenkins-0-" placeholder if present
+    raw_version = payload.get('model_version', '') or ''
+    if raw_version.startswith('jenkins-0-'):
+        raw_version = raw_version[len('jenkins-0-'):]
+    job.model_version   = raw_version
+
     job.drift_report    = payload.get('drift_report', {})
     job.log_output      = payload.get('log_output', '')
     job.end_time        = tz.now()
@@ -230,6 +408,7 @@ def update_job_result(job_id: int, payload: Dict[str, Any]) -> bool:
         MLOpsConfig.objects.filter(standard=job.standard).update(
             last_f1_score=job.f1_score,
             last_drift_score=job.drift_score,
+            # Store clean version (already stripped above)
             current_model_version=job.model_version or f'v{job.id}',
             last_trained_at=tz.now(),
             last_trained_doc_count=job.documents_count,

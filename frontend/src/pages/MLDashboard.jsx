@@ -533,16 +533,26 @@ export default function MLDashboard() {
                 {models.length > 0 ? (
                   models.map((model) => {
                     const isBest = model.name === bestModel?.name;
+                    const isTie  = bestModel?.is_tie && bestModel?.tied_with?.includes(model.name);
                     const modelStatus = getModelStatus(model);
+                    const hasTrained = isModelTrained(model);
                     return (
                       <tr key={model.name} className={isBest ? "bg-slate-50" : "bg-white"}>
                         <td className="px-4 py-4 font-semibold text-slate-900">{model.name}</td>
                         {datasetType === "classification" ? (
                           <>
-                            <td className="px-4 py-4 text-center text-slate-700">{formatPercent(model.accuracy || 0)}</td>
-                            <td className="px-4 py-4 text-center text-slate-700">{formatPercent(model.precision || 0)}</td>
-                            <td className="px-4 py-4 text-center text-slate-700">{formatPercent(model.recall || 0)}</td>
-                            <td className="px-4 py-4 text-center text-slate-700">{formatPercent(model.f1_score || 0)}</td>
+                            <td className="px-4 py-4 text-center text-slate-700">
+                              {hasTrained ? formatPercent(model.accuracy) : '—'}
+                            </td>
+                            <td className="px-4 py-4 text-center text-slate-700">
+                              {hasTrained ? formatPercent(model.precision) : '—'}
+                            </td>
+                            <td className="px-4 py-4 text-center text-slate-700">
+                              {hasTrained ? formatPercent(model.recall) : '—'}
+                            </td>
+                            <td className="px-4 py-4 text-center text-slate-700">
+                              {hasTrained ? formatPercent(model.f1_score) : '—'}
+                            </td>
                           </>
                         ) : (
                           <>
@@ -551,15 +561,26 @@ export default function MLDashboard() {
                           </>
                         )}
                         <td className="px-4 py-4 text-center">
-                          <span className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${isBest ? "bg-emerald-100 text-emerald-700" : modelStatus.color}`}>
-                            {isBest ? "Best Model" : modelStatus.label}
-                          </span>
+                          {isBest && bestModel?.is_tie ? (
+                            <span className="inline-flex rounded-full px-3 py-1 text-xs font-semibold bg-amber-100 text-amber-700">
+                              Tie
+                            </span>
+                          ) : isBest ? (
+                            <span className="inline-flex rounded-full px-3 py-1 text-xs font-semibold bg-emerald-100 text-emerald-700">
+                              Best (F1)
+                            </span>
+                          ) : (
+                            <span className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${modelStatus.color}`}>
+                              {modelStatus.label}
+                            </span>
+                          )}
                         </td>
                         <td className="px-4 py-4 text-right">
                           <button
                             type="button"
                             onClick={() => handleModelSelect(model)}
-                            className="rounded-full border border-slate-200 bg-slate-950 px-4 py-2 text-xs font-semibold text-white transition hover:border-sky-400 hover:bg-slate-800"
+                            disabled={!hasTrained}
+                            className="rounded-full border border-slate-200 bg-slate-950 px-4 py-2 text-xs font-semibold text-white transition hover:border-sky-400 hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed"
                           >
                             Select Model
                           </button>
@@ -611,19 +632,27 @@ export default function MLDashboard() {
                   <div className="mt-4 grid gap-3 sm:grid-cols-2">
                     <div className="rounded-2xl bg-slate-50 p-4">
                       <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Accuracy</p>
-                      <p className="mt-2 text-xl font-semibold text-slate-900">{formatPercent(selectedModel?.accuracy || 0)}</p>
+                      <p className="mt-2 text-xl font-semibold text-slate-900">
+                        {isModelTrained(selectedModel) ? formatPercent(selectedModel?.accuracy) : '—'}
+                      </p>
                     </div>
                     <div className="rounded-2xl bg-slate-50 p-4">
                       <p className="text-xs uppercase tracking-[0.2em] text-slate-500">F1 score</p>
-                      <p className="mt-2 text-xl font-semibold text-slate-900">{formatPercent(selectedModel?.f1_score || 0)}</p>
+                      <p className="mt-2 text-xl font-semibold text-slate-900">
+                        {isModelTrained(selectedModel) ? formatPercent(selectedModel?.f1_score) : '—'}
+                      </p>
                     </div>
                     <div className="rounded-2xl bg-slate-50 p-4">
                       <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Precision</p>
-                      <p className="mt-2 text-xl font-semibold text-slate-900">{formatPercent(selectedModel?.precision || 0)}</p>
+                      <p className="mt-2 text-xl font-semibold text-slate-900">
+                        {isModelTrained(selectedModel) ? formatPercent(selectedModel?.precision) : '—'}
+                      </p>
                     </div>
                     <div className="rounded-2xl bg-slate-50 p-4">
                       <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Recall</p>
-                      <p className="mt-2 text-xl font-semibold text-slate-900">{formatPercent(selectedModel?.recall || 0)}</p>
+                      <p className="mt-2 text-xl font-semibold text-slate-900">
+                        {isModelTrained(selectedModel) ? formatPercent(selectedModel?.recall) : '—'}
+                      </p>
                     </div>
                   </div>
                   {selectedModel?.cross_validation && (

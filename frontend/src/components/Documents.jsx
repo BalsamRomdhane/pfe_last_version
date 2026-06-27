@@ -5,7 +5,6 @@ import Layout from './Layout';
 import UploadBox from './UploadBox';
 import api from '../services/api';
 import { FileText } from 'lucide-react';
-import { Eye, File, Clock, History } from 'lucide-react';
 
 const statusLabels = {
   pending: 'Pending',
@@ -24,14 +23,12 @@ const Documents = () => {
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  const [pageSize] = useState(20);
   const [total, setTotal] = useState(0);
   const [file, setFile] = useState(null);
   const [counts, setCounts] = useState({ total: 0, approved: 0, rejected: 0, pending: 0, reviewing: 0 });
   const [statusFilter, setStatusFilter] = useState('');
   const [sortBy, setSortBy] = useState('newest');
-  const [expandedRows, setExpandedRows] = useState(new Set());
-  const [rowDetails, setRowDetails] = useState({});
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [updatingStatusId, setUpdatingStatusId] = useState(null);
@@ -39,6 +36,7 @@ const Documents = () => {
   useEffect(() => {
     fetchDocuments();
     fetchNormes();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Debounce search input

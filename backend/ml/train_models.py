@@ -732,6 +732,9 @@ def train_all_models(standard=None, norme_id=None, dataset_type='classification'
 
         for name, base_clf in models.items():
             try:
+                import time as _time
+                _t0 = _time.time()
+
                 tfidf_model = SKPipeline([
                     ('tfidf', TfidfVectorizer(
                         max_features=500,
@@ -743,13 +746,17 @@ def train_all_models(standard=None, norme_id=None, dataset_type='classification'
                 ])
                 tfidf_model.fit(_Xtr, _ytr)
                 y_pred = tfidf_model.predict(_Xte)
-                accuracy  = accuracy_score(_yte, y_pred)
-                precision = precision_score(_yte, y_pred, zero_division=0)
-                recall    = recall_score(_yte, y_pred, zero_division=0)
-                f1        = f1_score(_yte, y_pred, zero_division=0)
-                cm        = confusion_matrix(_yte, y_pred).tolist()
-                train_acc = accuracy_score(_ytr, tfidf_model.predict(_Xtr))
-                overfitting_gap = train_acc - accuracy
+                _training_time = round(_time.time() - _t0, 2)
+
+                # Use the unified _evaluate_predictions helper
+                test_m  = _evaluate_predictions(_yte, y_pred)
+                train_m = _evaluate_predictions(_ytr, tfidf_model.predict(_Xtr))
+                accuracy  = test_m['accuracy']
+                precision = test_m['precision']
+                recall    = test_m['recall']
+                f1        = test_m['f1']
+                cm        = test_m['confusion_matrix']
+                overfitting_gap   = train_m['accuracy'] - accuracy
                 overfitting_level = 'HIGH' if overfitting_gap >= 0.15 else ('MEDIUM' if overfitting_gap >= 0.08 else 'LOW')
 
                 print(f"\n{name} (TF-IDF):")
@@ -758,6 +765,7 @@ def train_all_models(standard=None, norme_id=None, dataset_type='classification'
                 print(f"  Recall:    {recall:.4f}")
                 print(f"  F1-Score:  {f1:.4f}")
                 print(f"  Confusion Matrix: {cm}")
+                print(f"  Training time: {_training_time}s")
 
                 if accuracy > best_accuracy:
                     best_accuracy = accuracy
@@ -767,24 +775,38 @@ def train_all_models(standard=None, norme_id=None, dataset_type='classification'
                 joblib.dump(tfidf_model, model_path)
 
                 results[name] = {
-                    "accuracy": round(float(accuracy), 4),
-                    "precision": round(float(precision), 4),
-                    "recall": round(float(recall), 4),
-                    "f1_score": round(float(f1), 4),
-                    "confusion_matrix": cm,
-                    "sample_count": len(X_text_for_tfidf),
-                    "overfitting_risk": overfitting_level,
-                    "pipeline": "tfidf",
-                    "confusion_counts": {
-                        'tp': int(cm[0][0]) if len(cm) > 1 else 0,
-                        'tn': int(cm[1][1]) if len(cm) > 1 else 0,
-                        'fp': int(cm[0][1]) if len(cm) > 1 else 0,
-                        'fn': int(cm[1][0]) if len(cm) > 1 else 0,
+                    "accuracy":          round(float(accuracy), 4),
+                    "precision":         round(float(precision), 4),
+                    "recall":            round(float(recall), 4),
+                    "f1_score":          round(float(f1), 4),
+                    "confusion_matrix":  cm,
+                    "confusion_counts":  {
+                        'tp': test_m['tp'], 'tn': test_m['tn'],
+                        'fp': test_m['fp'], 'fn': test_m['fn'],
                     },
+                    "train_metrics":     train_m,
+                    "test_metrics":      test_m,
+                    "sample_count":      len(X_text_for_tfidf),
+                    "train_size":        len(_Xtr),
+                    "test_size":         len(_Xte),
+                    "trained_date":      datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "training_time":     _training_time,
+                    "overfitting_risk":  overfitting_level,
+                    "overfitting_gap":   round(float(overfitting_gap), 4),
+                    "pipeline":          "tfidf",
+                    "cross_validation":  None,
+                    "feature_importance": [],
                 }
             except Exception as e:
                 print(f"\n{name} TF-IDF ERROR: {e}")
-                results[name] = {"error": str(e), "accuracy": 0, "precision": 0, "recall": 0, "f1_score": 0}
+                results[name] = {
+                    "error": str(e),
+                    "accuracy":  None, "precision": None,
+                    "recall":    None, "f1_score":  None,
+                    "confusion_matrix": None, "sample_count": 0,
+                    "trained_date": None, "training_time": None,
+                    "cross_validation": None, "feature_importance": [],
+                }
 
         # Save metrics and skip the binary-vector loop below
         print(f"\n=== Training Complete (TF-IDF pipeline) ===")
@@ -808,18 +830,22 @@ def train_all_models(standard=None, norme_id=None, dataset_type='classification'
 
     for name, model in models.items():
         try:
+            import time as _time
+            _t0 = _time.time()
+
             model.fit(X_train, y_train)
             y_pred = model.predict(X_test)
+            _training_time = round(_time.time() - _t0, 2)
 
-            # Calculate metrics with proper handling
+            # All four metrics via the unified helper
             train_metrics = _evaluate_predictions(y_train, model.predict(X_train))
-            val_metrics = _evaluate_predictions(y_val, model.predict(X_val))
-            test_metrics = _evaluate_predictions(y_test, y_pred)
-            accuracy = test_metrics['accuracy']
+            val_metrics   = _evaluate_predictions(y_val,   model.predict(X_val))
+            test_metrics  = _evaluate_predictions(y_test,  y_pred)
+            accuracy  = test_metrics['accuracy']
             precision = test_metrics['precision']
-            recall = test_metrics['recall']
-            f1 = test_metrics['f1']
-            cm = test_metrics['confusion_matrix']
+            recall    = test_metrics['recall']
+            f1        = test_metrics['f1']
+            cm        = test_metrics['confusion_matrix']
             cv_metrics = _compute_grouped_cv_metrics(model, X_train, y_train, groups_train) if groups_train is not None else None
 
             print(f"\n{name}:")
@@ -827,83 +853,127 @@ def train_all_models(standard=None, norme_id=None, dataset_type='classification'
             print(f"  Precision: {precision:.4f}")
             print(f"  Recall:    {recall:.4f}")
             print(f"  F1-Score:  {f1:.4f}")
-            print(f"  Confusion Matrix: {cm}")
+            print(f"  Training time: {_training_time}s")
 
-            # Track best model
             if accuracy > best_accuracy:
                 best_accuracy = accuracy
                 best_model_name = name
 
-            # Save model
             model_path = os.path.join(MODELS_DIR, f"{sanitize_standard(standard)}_{name}.pkl")
             joblib.dump(model, model_path)
 
-            train_accuracy = train_metrics['accuracy']
-            overfitting_gap = train_accuracy - test_metrics['accuracy']
-            if overfitting_gap >= 0.15:
-                overfitting_level = 'HIGH'
-            elif overfitting_gap >= 0.08:
-                overfitting_level = 'MEDIUM'
-            else:
-                overfitting_level = 'LOW'
+            overfitting_gap   = train_metrics['accuracy'] - accuracy
+            overfitting_level = 'HIGH' if overfitting_gap >= 0.15 else ('MEDIUM' if overfitting_gap >= 0.08 else 'LOW')
 
             results[name] = {
-                "accuracy": round(float(accuracy), 4),
-                "precision": round(float(precision), 4),
-                "recall": round(float(recall), 4),
-                "f1_score": round(float(f1), 4),
-                "confusion_matrix": cm,
-                "confusion_counts": {
-                    'tp': test_metrics['tp'],
-                    'tn': test_metrics['tn'],
-                    'fp': test_metrics['fp'],
-                    'fn': test_metrics['fn'],
+                "accuracy":          round(float(accuracy), 4),
+                "precision":         round(float(precision), 4),
+                "recall":            round(float(recall), 4),
+                "f1_score":          round(float(f1), 4),
+                "confusion_matrix":  cm,
+                "confusion_counts":  {
+                    'tp': test_metrics['tp'], 'tn': test_metrics['tn'],
+                    'fp': test_metrics['fp'], 'fn': test_metrics['fn'],
                 },
-                "train_metrics": train_metrics,
+                "train_metrics":      train_metrics,
                 "validation_metrics": val_metrics,
-                "test_metrics": test_metrics,
-                "sample_count": len(X),
-                "trained_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "cross_validation": cv_metrics,
+                "test_metrics":       test_metrics,
+                "sample_count":       len(X),
+                "train_size":         len(X_train),
+                "val_size":           len(X_val),
+                "test_size":          len(X_test),
+                "trained_date":       datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "training_time":      _training_time,
+                "cross_validation":   cv_metrics,
                 "feature_importance": _feature_importance_for_model(model, feature_names),
-                "overfitting_gap": round(float(overfitting_gap), 4),
-                "overfitting_level": overfitting_level,
+                "overfitting_gap":    round(float(overfitting_gap), 4),
+                "overfitting_level":  overfitting_level,
+                "pipeline":           "binary",
             }
         except Exception as e:
             print(f"\n{name} ERROR: {str(e)}")
             results[name] = {
-                "error": str(e),
-                "accuracy": 0,
-                "precision": 0,
-                "recall": 0,
-                "f1_score": 0,
-                "confusion_matrix": None,
-                "cross_validation": None,
+                "error":             str(e),
+                "accuracy":          None,
+                "precision":         None,
+                "recall":            None,
+                "f1_score":          None,
+                "confusion_matrix":  None,
+                "sample_count":      0,
+                "trained_date":      None,
+                "training_time":     None,
+                "cross_validation":  None,
                 "feature_importance": [],
             }
 
-    # Train BiLSTM on text dataset if enough text samples are available
+    # ── BiLSTM — same dataset and split as RF/LR/GB ──────────────────────────
+    # BiLSTM previously used a separate simple train_test_split on the text
+    # dataset.  We now use the identical split (train_idx / test_idx) already
+    # computed above so all four algorithms are evaluated on the same hold-out
+    # set.  If text data is unavailable we derive it from X (feature vectors)
+    # to ensure BiLSTM always uses exactly the same samples.
     X_text, y_text = load_text_dataset(standard=standard, norme_id=norme_id, source=source_mode)
     text_warning = None
+    bilstm_trained_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
     if not _BILSTM_AVAILABLE:
         results["BiLSTM"] = {
             "error": "BiLSTM unavailable — sentence-transformers/PyTorch DLL not loaded.",
-            "accuracy": 0, "precision": 0, "recall": 0, "f1_score": 0, "confusion_matrix": None,
+            "accuracy": None,
+            "precision": None,
+            "recall": None,
+            "f1_score": None,
+            "confusion_matrix": None,
+            "sample_count": 0,
+            "trained_date": None,
+            "cross_validation": None,
+            "feature_importance": [],
         }
     elif len(X_text) >= 20 and len(np.unique(y_text)) >= 2:
         try:
-            X_text_train, X_text_test, y_text_train, y_text_test = train_test_split(
-                X_text, y_text, test_size=0.2, random_state=42, stratify=y_text,
-            )
+            import time as _time
+            _bilstm_start = _time.time()
+
+            # ── Use the same grouped split ────────────────────────────────────
+            # Map text indices to the same train/test split used for RF/LR/GB.
+            # When len(X_text) == len(X) we reuse train_idx / test_idx directly.
+            # When lengths differ (text pipeline filtered some rows) we rebuild
+            # the split on the text dataset using the same seed/strategy.
+            if len(X_text) == len(X):
+                X_text_train = [X_text[i] for i in train_idx]
+                X_text_test  = [X_text[i] for i in test_idx]
+                y_text_train = y_text[train_idx]
+                y_text_test  = y_text[test_idx]
+            else:
+                # Rebuild an equivalent grouped split for the text dataset
+                _y_t   = np.array(y_text, dtype=np.int64)
+                _tr_t, _, _te_t = _split_train_validation_test(
+                    np.arange(len(X_text)), _y_t, groups=None
+                )
+                X_text_train = [X_text[i] for i in _tr_t]
+                X_text_test  = [X_text[i] for i in _te_t]
+                y_text_train = _y_t[_tr_t]
+                y_text_test  = _y_t[_te_t]
+
             bilstm = BiLSTMClassifier()
             bilstm.fit(X_text_train, y_text_train.tolist(), epochs=5, batch_size=16)
             y_pred_text = bilstm.predict(X_text_test)
 
-            accuracy  = accuracy_score(y_text_test, y_pred_text)
-            precision = precision_score(y_text_test, y_pred_text, zero_division=0)
-            recall    = recall_score(y_text_test, y_pred_text, zero_division=0)
-            f1        = f1_score(y_text_test, y_pred_text, zero_division=0)
-            cm        = confusion_matrix(y_text_test, y_pred_text).tolist()
+            _bilstm_time = round(_time.time() - _bilstm_start, 2)
+
+            # Use the same _evaluate_predictions helper as RF/LR/GB
+            bilstm_metrics = _evaluate_predictions(y_text_test, y_pred_text)
+            accuracy  = bilstm_metrics['accuracy']
+            precision = bilstm_metrics['precision']
+            recall    = bilstm_metrics['recall']
+            f1        = bilstm_metrics['f1']
+            cm        = bilstm_metrics['confusion_matrix']
+
+            # Overfitting check (same logic as RF/LR/GB)
+            y_pred_train = bilstm.predict(X_text_train)
+            train_acc = accuracy_score(y_text_train, y_pred_train)
+            overfitting_gap = train_acc - accuracy
+            overfitting_level = 'HIGH' if overfitting_gap >= 0.15 else ('MEDIUM' if overfitting_gap >= 0.08 else 'LOW')
 
             print(f"\nBiLSTM:")
             print(f"  Accuracy:  {accuracy:.4f}")
@@ -911,6 +981,7 @@ def train_all_models(standard=None, norme_id=None, dataset_type='classification'
             print(f"  Recall:    {recall:.4f}")
             print(f"  F1-Score:  {f1:.4f}")
             print(f"  Confusion Matrix: {cm}")
+            print(f"  Training time: {_bilstm_time}s")
 
             if accuracy > best_accuracy:
                 best_accuracy = accuracy
@@ -918,33 +989,89 @@ def train_all_models(standard=None, norme_id=None, dataset_type='classification'
 
             model_path = os.path.join(MODELS_DIR, f"{sanitize_standard(standard)}_BiLSTM.pkl")
             joblib.dump(bilstm, model_path)
+            bilstm_trained_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             results["BiLSTM"] = {
-                "accuracy": round(float(accuracy), 4),
-                "precision": round(float(precision), 4),
-                "recall": round(float(recall), 4),
-                "f1_score": round(float(f1), 4),
-                "confusion_matrix": cm,
-                "sample_count": len(X_text),
-                "trained_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "accuracy":          round(float(accuracy), 4),
+                "precision":         round(float(precision), 4),
+                "recall":            round(float(recall), 4),
+                "f1_score":          round(float(f1), 4),
+                "confusion_matrix":  cm,
+                "confusion_counts":  bilstm_metrics,
+                "sample_count":      len(X_text),
+                "train_size":        len(X_text_train),
+                "test_size":         len(X_text_test),
+                "trained_date":      bilstm_trained_at,
+                "training_time":     _bilstm_time,
+                "overfitting_gap":   round(float(overfitting_gap), 4),
+                "overfitting_level": overfitting_level,
+                # BiLSTM does not produce feature_importance or grouped CV
+                "cross_validation":  None,
+                "feature_importance": [],
+                "pipeline": "bilstm",
             }
         except Exception as e:
             text_warning = str(e)
             print(f"\nBiLSTM ERROR: {text_warning}")
             results["BiLSTM"] = {
-                "error": text_warning,
-                "accuracy": 0, "precision": 0, "recall": 0, "f1_score": 0, "confusion_matrix": None,
+                "error":             text_warning,
+                "accuracy":          None,
+                "precision":         None,
+                "recall":            None,
+                "f1_score":          None,
+                "confusion_matrix":  None,
+                "sample_count":      len(X_text),
+                "trained_date":      None,
+                "cross_validation":  None,
+                "feature_importance": [],
             }
     else:
-        text_warning = "Not enough text samples or class balance for BiLSTM training"
+        text_warning = f"Not enough text samples for BiLSTM ({len(X_text)} found, 20 required) or missing class balance."
         results["BiLSTM"] = {
-            "error": text_warning,
-            "accuracy": 0, "precision": 0, "recall": 0, "f1_score": 0, "confusion_matrix": None,
+            "error":             text_warning,
+            "accuracy":          None,
+            "precision":         None,
+            "recall":            None,
+            "f1_score":          None,
+            "confusion_matrix":  None,
+            "sample_count":      len(X_text),
+            "trained_date":      None,
+            "cross_validation":  None,
+            "feature_importance": [],
         }
 
     print(f"\n=== Training Complete ===")
 
-    # ── Persist metrics to JSON so ml_models_api can return real values ──────
+    # ── Select best model by F1 (primary) then Accuracy ──────────────────────
+    # Override the accuracy-based best_model_name computed during the loop.
+    _trained = {
+        n: r for n, r in results.items()
+        if not r.get('error') and r.get('f1_score') is not None and r['f1_score'] > 0
+    }
+    if _trained:
+        # Sort by F1 desc, then Accuracy desc
+        _sorted = sorted(
+            _trained.items(),
+            key=lambda kv: (kv[1].get('f1_score', 0), kv[1].get('accuracy', 0)),
+            reverse=True,
+        )
+        _top_f1  = _sorted[0][1].get('f1_score', 0)
+        _top_acc = _sorted[0][1].get('accuracy', 0)
+        _tied    = [n for n, r in _sorted if
+                    abs(r.get('f1_score', 0) - _top_f1) <= 0.0001 and
+                    abs(r.get('accuracy',  0) - _top_acc) <= 0.0001]
+        if len(_tied) > 1:
+            best_model_name = 'Tie'   # explicit tie — no arbitrary default
+            for n in _tied:
+                results[n]['is_best'] = True
+                results[n]['is_tie']  = True
+        else:
+            best_model_name = _sorted[0][0]
+            results[best_model_name]['is_best'] = True
+    else:
+        best_model_name = None  # no model trained successfully
+
+    # ── Persist metrics to JSON ───────────────────────────────────────────────
     metrics_path = os.path.join(MODELS_DIR, f"{sanitize_standard(standard or 'default')}_metrics.json")
     try:
         import json as _json
@@ -960,19 +1087,23 @@ def train_all_models(standard=None, norme_id=None, dataset_type='classification'
             coverage = round((len(feature_names) / max(norm.rules.count() if norm else 1, 1)) * 100, 2)
 
         dataset_quality = {
-            'coverage': coverage,
-            'completeness': round(_dataset_completeness(X, groups, metadata, feature_names), 2),
-            'duplicates': round(_calculate_duplicate_rate(X), 2),
+            'coverage':      coverage,
+            'completeness':  round(_dataset_completeness(X, groups, metadata, feature_names), 2),
+            'duplicates':    round(_calculate_duplicate_rate(X), 2),
             'class_balance': round(_calculate_class_balance(y), 4),
-            'leakage_risk': round(1.0 - (len(np.unique(groups)) / max(len(groups), 1)), 4) if len(groups) else 0.0,
+            'leakage_risk':  round(1.0 - (len(np.unique(groups)) / max(len(groups), 1)), 4) if len(groups) else 0.0,
         }
 
         metrics_payload = {
-            "results": results,
-            "best_model": best_model_name,
-            "trained_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "standard": standard,
-            "samples": len(X),
+            "results":       results,
+            "best_model":    best_model_name,   # F1-based, "Tie" when equal
+            "trained_at":    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "standard":      standard,
+            "samples":       len(X),            # total training samples
+            "dataset_size":  len(X),            # alias used by ci/update_training_job.py
+            "train_size":    len(X_train),
+            "val_size":      len(X_val),
+            "test_size":     len(X_test),
             "dataset_quality": dataset_quality,
         }
         with open(metrics_path, "w", encoding="utf-8") as f:
@@ -1014,15 +1145,17 @@ def train_all_models(standard=None, norme_id=None, dataset_type='classification'
     }
 
     return {
-        "results": results,
-        "best_model": best_model_name,
-        "best_accuracy": round(float(best_accuracy), 4) if best_accuracy >= 0 else 0,
-        "samples": len(X),
-        "test_size": len(X_test),
-        "approved_count": int(approved_count),
-        "rejected_count": int(rejected_count),
+        "results":                 results,
+        "best_model":              best_model_name,   # F1-based; "Tie" when equal
+        "best_accuracy":           round(float(best_accuracy), 4) if best_accuracy >= 0 else None,
+        "samples":                 len(X),
+        "dataset_size":            len(X),
+        "train_size":              len(X_train),
+        "val_size":                len(X_val),
+        "test_size":               len(X_test),
+        "approved_count":          int(approved_count),
+        "rejected_count":          int(rejected_count),
         "class_imbalance_warning": class_imbalance_warning,
-        "dataset_warning": dataset_warning,
-        "dataset_quality": dataset_quality,
-        "final_report": final_report,
+        "dataset_warning":         dataset_warning,
+        "dataset_quality":         dataset_quality,
     }

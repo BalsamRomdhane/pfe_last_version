@@ -1,0 +1,43 @@
+# HELP compliance_documents_total Total documents
+# TYPE compliance_documents_total gauge
+compliance_documents_total 2800
+
+# HELP compliance_evidence_samples_total Total evidence samples
+# TYPE compliance_evidence_samples_total gauge
+compliance_evidence_samples_total 69154
+
+# HELP compliance_training_jobs_total Total training jobs
+# TYPE compliance_training_jobs_total counter
+compliance_training_jobs_total 0
+
+# HELP compliance_training_jobs_success Successful training jobs
+# TYPE compliance_training_jobs_success counter
+compliance_training_jobs_success 0
+
+# HELP compliance_training_jobs_failed Failed training jobs
+# TYPE compliance_training_jobs_failed counter
+compliance_training_jobs_failed 0
+
+# HELP compliance_model_f1_score F1 score of current model
+# TYPE compliance_model_f1_score gauge
+compliance_model_f1_score{standard="ISO 27001 - Securite de l information"} 0.0
+
+# HELP compliance_drift_score Current semantic drift score
+# TYPE compliance_drift_score gauge
+compliance_drift_score{standard="ISO 27001 - Securite de l information"} 0.0
+
+# HELP compliance_model_f1_score F1 score of current model
+# TYPE compliance_model_f1_score gauge
+compliance_model_f1_score{standard="ISO 9001 - Controle et validation des documents"} 0.0
+
+# HELP compliance_drift_score Current semantic drift score
+# TYPE compliance_drift_score gauge
+compliance_drift_score{standard="ISO 9001 - Controle et validation des documents"} 0.0
+
+# HELP compliance_model_f1_score F1 score of current model
+# TYPE compliance_model_f1_score gauge
+compliance_model_f1_score{standard="TISAX - Information Security Assessment"} 0.0
+
+# HELP compliance_drift_score Current semantic drift score
+# TYPE compliance_drift_score gauge
+compliance_drift_score{standard="TISAX - Information Security Assessment"} 0.0

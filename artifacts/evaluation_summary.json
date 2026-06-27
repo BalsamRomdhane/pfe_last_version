@@ -1,0 +1,17 @@
+[
+  {
+    "norm": "ISO_27001___Securite_de_l_information",
+    "best_model": "RandomForest",
+    "samples": 0
+  },
+  {
+    "norm": "ISO_9001___Controle_et_validation_des_documents",
+    "best_model": "BiLSTM",
+    "samples": 711
+  },
+  {
+    "norm": "TISAX___Information_Security_Assessment",
+    "best_model": "RandomForest",
+    "samples": 0
+  }
+]
