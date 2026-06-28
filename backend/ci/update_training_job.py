@@ -80,6 +80,11 @@ for mf in metrics_files:
 
     standard_key = norm.name if norm else os.path.basename(mf).replace('_metrics.json', '')
 
+    # FIX #2: skip generic default_metrics.json (standard=null, no real norm)
+    if not norm and not standard_from_file:
+        print('[SKIP] %s — standard=null, no norm resolved (generic default file)' % os.path.basename(mf))
+        continue
+
     # Build a clean model_version string:
     # - With real Jenkins: "RandomForest v42" (BUILD_NUMBER=42)
     # - Without Jenkins (local): "RandomForest" (no build number prefix)
@@ -98,23 +103,29 @@ for mf in metrics_files:
         f1_score=float(bm.get('f1_score', 0.0)),
         precision_score=float(bm.get('precision', 0.0)),
         recall_score=float(bm.get('recall', 0.0)),
-        avg_similarity=float(bm.get('accuracy', 0.0)),
+        accuracy=float(bm.get('accuracy', 0.0)),           # FIX #8: accuracy → TrainingJob.accuracy
+        avg_similarity=float(bm.get('accuracy', 0.0)),     # kept for backward compat (frontend fallback)
         model_version=model_version_str,
         jenkins_build_id=build_id if build_id != '0' else '',
         jenkins_url=build_url,
         triggered_by='jenkins' if build_id != '0' else 'local',
-        drift_report=data.get('dataset_quality', {}),
+        drift_report={},                                   # FIX #7: empty until real drift computed
         log_output='Build #%s | %s | best=%s' % (build_id, standard_key, best_model),
     )
 
-    MLOpsConfig.objects.update_or_create(
+    cfg, _ = MLOpsConfig.objects.update_or_create(
         standard=standard_key,
         defaults={
             'last_trained_at': timezone.now(),
             'last_trained_doc_count': samples,
             'current_model_version': model_version_str,
             'last_f1_score': float(bm.get('f1_score', 0.0)),
-        }
+            'dataset_size': samples,
+        },
+    )
+    # FIX #9: increment training_count on every successful run
+    MLOpsConfig.objects.filter(standard=standard_key).update(
+        training_count=cfg.training_count + 1,
     )
     print('[OK] TrainingJob #%d | %-55s f1=%.4f' % (
         job.id, standard_key, float(bm.get('f1_score', 0))

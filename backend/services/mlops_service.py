@@ -477,13 +477,16 @@ def update_job_result(job_id: int, payload: Dict[str, Any]) -> bool:
     job.save()
 
     if job.status == 'success' and job.standard:
+        from django.db.models import F as _F
         MLOpsConfig.objects.filter(standard=job.standard).update(
             last_f1_score=job.f1_score,
             last_drift_score=job.drift_score,
-            # Store clean version (already stripped above)
             current_model_version=job.model_version or f'v{job.id}',
             last_trained_at=tz.now(),
             last_trained_doc_count=job.documents_count,
+            dataset_size=job.documents_count,
+            # FIX #9: increment training_count for Jenkins callback path
+            training_count=_F('training_count') + 1,
         )
 
     logger.info('TrainingJob #%s updated to %s', job_id, job.status)

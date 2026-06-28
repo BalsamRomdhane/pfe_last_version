@@ -198,42 +198,82 @@ class _TextDataset(Dataset):
 
 
 class _BiLSTMModel(nn.Module if _HAS_TORCH else object):
-    """Module-level BiLSTM model so joblib can pickle it."""
+    """Module-level BiLSTM model so joblib can pickle it.
 
-    def __init__(self, vocab_size, emb_dim, hid_dim, num_layers, n_classes):
+    Architecture with regularisation to prevent memorisation:
+    - Embedding dropout (drops entire token embeddings)
+    - BiLSTM with dropout between layers
+    - Layer normalisation on pooled output
+    - Two-layer head with intermediate dropout
+    """
+
+    def __init__(self, vocab_size, emb_dim, hid_dim, num_layers, n_classes, dropout=0.4):
         if not _HAS_TORCH:
             raise RuntimeError("PyTorch required")
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, emb_dim, padding_idx=0)
-        self.lstm = nn.LSTM(emb_dim, hid_dim, num_layers=num_layers, bidirectional=True, batch_first=True)
-        self.head = nn.Linear(hid_dim * 2, n_classes)
+        self.emb_dropout = nn.Dropout(dropout)
+        self.lstm = nn.LSTM(
+            emb_dim, hid_dim,
+            num_layers=num_layers,
+            bidirectional=True,
+            batch_first=True,
+            dropout=dropout if num_layers > 1 else 0.0,
+        )
+        self.layer_norm = nn.LayerNorm(hid_dim * 2)
+        self.head = nn.Sequential(
+            nn.Linear(hid_dim * 2, hid_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hid_dim, n_classes),
+        )
 
     def forward(self, x):
-        emb = self.embedding(x)
+        emb = self.emb_dropout(self.embedding(x))
         out, _ = self.lstm(emb)
+        # Mean-pool over the sequence dimension
         pooled = out.mean(dim=1)
+        pooled = self.layer_norm(pooled)
         return self.head(pooled)
 
 
 class BiLSTMClassifier:
-    """Simple BiLSTM classifier with a small vocabulary builder.
+    """BiLSTM classifier with vocabulary builder, dropout regularisation and early stopping.
 
-    Note: This is a compact prototype for experimenting with sequence models.
-    It is intentionally minimal: it builds a token->id map from training texts,
-    uses an embedding layer, a bidirectional LSTM and a linear head.
-    Requires PyTorch to be installed to use.
+    Design principles to prevent inflated (100%) metrics:
+    1. Dropout (emb + LSTM + head) — forces the model to learn robust patterns
+       rather than memorising training sequences.
+    2. Weight decay (L2) via AdamW — penalises large weights.
+    3. Early stopping on validation loss — halts training before over-fitting.
+    4. The caller (train_models.py) is responsible for GroupShuffleSplit so that
+       no document appears in both train and test sets.
+
+    Requires PyTorch to be installed.
     """
 
-    def __init__(self, embedding_dim: int = 128, hidden_dim: int = 128, num_layers: int = 1, max_vocab: int = 20000):
+    def __init__(
+        self,
+        embedding_dim: int = 128,
+        hidden_dim: int = 128,
+        num_layers: int = 1,
+        max_vocab: int = 20000,
+        dropout: float = 0.4,
+        weight_decay: float = 1e-4,
+        patience: int = 3,
+    ):
         if not _HAS_TORCH:
             raise RuntimeError("PyTorch required for BiLSTMClassifier")
         self.embedding_dim = embedding_dim
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
         self.max_vocab = max_vocab
+        self.dropout = dropout
+        self.weight_decay = weight_decay
+        self.patience = patience
         self._vocab = {"<pad>": 0, "<unk>": 1}
         self._inv_vocab = None
         self.model = None
+        self._maxlen = None
 
     def _tokenize(self, text: str):
         return text.lower().strip().split()
@@ -259,37 +299,113 @@ class BiLSTMClassifier:
                 max_l = len(s)
         if maxlen is None:
             maxlen = max(1, max_l)
+        # Clamp to stored maxlen if model already trained (inference)
+        if self._maxlen is not None:
+            maxlen = self._maxlen
         padded = [s[:maxlen] + [0] * max(0, maxlen - len(s)) for s in seqs]
         return padded, maxlen
 
-    def fit(self, texts, labels, epochs: int = 5, batch_size: int = 32, lr: float = 1e-3):
+    def fit(self, texts, labels, epochs: int = 10, batch_size: int = 32, lr: float = 1e-3,
+            val_split: float = 0.15):
+        """Train with:
+        - AdamW (weight decay = L2 regularisation)
+        - Dropout enforced during training (model.train())
+        - Validation-based early stopping (patience=self.patience)
+        - Best-weight restore after early stopping
+        """
+        import math
         self._build_vocab(texts)
         sequences, maxlen = self._texts_to_sequences(texts)
-        X = torch.tensor(sequences, dtype=torch.long)
-        y = torch.tensor(labels, dtype=torch.long)
+        self._maxlen = maxlen
 
-        n_classes = int(max(y).item() + 1) if y.numel() > 0 else 2
+        # ── Validation split (stratified by label) ───────────────────────────
+        from sklearn.model_selection import train_test_split as _tts
+        labels_arr = list(labels)
+        # Only stratify when both classes are present
+        unique_lbls = set(labels_arr)
+        if len(unique_lbls) >= 2 and val_split > 0 and len(texts) >= 20:
+            idx_tr, idx_val = _tts(
+                list(range(len(sequences))),
+                test_size=val_split,
+                stratify=labels_arr,
+                random_state=42,
+            )
+        else:
+            idx_tr = list(range(len(sequences)))
+            idx_val = []
+
+        X_tr = torch.tensor([sequences[i] for i in idx_tr], dtype=torch.long)
+        y_tr = torch.tensor([labels_arr[i] for i in idx_tr], dtype=torch.long)
+
+        n_classes = int(y_tr.max().item() + 1) if y_tr.numel() > 0 else 2
         vocab_size = len(self._vocab)
-        self.model = _BiLSTMModel(vocab_size, self.embedding_dim, self.hidden_dim, self.num_layers, n_classes)
+        self.model = _BiLSTMModel(
+            vocab_size, self.embedding_dim, self.hidden_dim,
+            self.num_layers, n_classes, dropout=self.dropout,
+        )
 
-        ds = _TextDataset(X, y)
-        dl = DataLoader(ds, batch_size=batch_size, shuffle=True)
+        ds_tr = _TextDataset(X_tr, y_tr)
+        dl_tr = DataLoader(ds_tr, batch_size=batch_size, shuffle=True)
 
-        opt = torch.optim.Adam(self.model.parameters(), lr=lr)
+        # Validation tensors (may be empty)
+        has_val = len(idx_val) > 0
+        if has_val:
+            X_val_t = torch.tensor([sequences[i] for i in idx_val], dtype=torch.long)
+            y_val_t = torch.tensor([labels_arr[i] for i in idx_val], dtype=torch.long)
+
+        opt = torch.optim.AdamW(
+            self.model.parameters(), lr=lr, weight_decay=self.weight_decay
+        )
         loss_fn = nn.CrossEntropyLoss()
 
-        self.model.train()
+        best_val_loss = math.inf
+        best_state = None
+        no_improve = 0
+
         for epoch in range(epochs):
-            total_loss = 0.0
-            for bx, by in dl:
+            # ── Train ────────────────────────────────────────────────────────
+            self.model.train()
+            train_loss = 0.0
+            for bx, by in dl_tr:
                 opt.zero_grad()
                 out = self.model(bx)
                 loss = loss_fn(out, by)
                 loss.backward()
+                # Gradient clipping prevents exploding gradients
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=5.0)
                 opt.step()
-                total_loss += loss.item() * bx.size(0)
-            avg = total_loss / len(ds)
-            print(f"[BiLSTM] Epoch {epoch+1}/{epochs} loss={avg:.4f}")
+                train_loss += loss.item() * bx.size(0)
+            train_loss /= len(ds_tr)
+
+            # ── Validation ───────────────────────────────────────────────────
+            if has_val:
+                self.model.eval()
+                with torch.no_grad():
+                    val_out = self.model(X_val_t)
+                    val_loss = loss_fn(val_out, y_val_t).item()
+                print(
+                    f"[BiLSTM] Epoch {epoch+1}/{epochs}"
+                    f"  train_loss={train_loss:.4f}"
+                    f"  val_loss={val_loss:.4f}"
+                )
+                # Early stopping
+                if val_loss < best_val_loss - 1e-4:
+                    best_val_loss = val_loss
+                    # Deep copy of state dict
+                    best_state = {k: v.clone() for k, v in self.model.state_dict().items()}
+                    no_improve = 0
+                else:
+                    no_improve += 1
+                    if no_improve >= self.patience:
+                        print(f"[BiLSTM] Early stopping at epoch {epoch+1} (patience={self.patience})")
+                        break
+            else:
+                print(f"[BiLSTM] Epoch {epoch+1}/{epochs}  train_loss={train_loss:.4f}")
+
+        # Restore best weights when early stopping fired
+        if best_state is not None:
+            self.model.load_state_dict(best_state)
+        self.model.eval()
 
     def predict_proba(self, texts):
         if self.model is None:

@@ -168,7 +168,7 @@ def get_model_path(model_name, standard=None):
     legacy_path = os.path.join(MODELS_DIR, f"{model_name}.pkl")
     if os.path.exists(legacy_path):
         return legacy_path
-    return os.path.join(MODELS_DIR, f"{sanitize_standard(standard or 'default')}_{model_name}.pkl")
+    return os.path.join(MODELS_DIR, f"{sanitize_standard(standard or 'unknown')}_{model_name}.pkl")
 
 
 def load_trained_model(model_name, standard=None):
@@ -398,45 +398,82 @@ def load_dataset_with_metadata(standard=None, norme_id=None, source='auto'):
     return np.array(X, dtype=np.int64), np.array(y, dtype=np.int64)
 
 
+def _remove_verdict_markers(text: str) -> str:
+    """Strip deterministic verdict markers embedded in synthetic training texts.
+
+    The dataset generator prepended phrases like "Contrôle vérifié :" or
+    "Contrôle à renforcer :" that trivially encode the label into the feature
+    space.  A BiLSTM (or any classifier) that sees these markers achieves 100 %
+    accuracy without learning any real compliance pattern.
+
+    Removing them forces the model to rely on the actual evidence content.
+    """
+    import re as _re
+    # Verdict prefix patterns (appear at the very beginning or after the rule name bracket)
+    VERDICT_PATTERNS = [
+        r"Contrôle vérifié\s*:",
+        r"Controle verifie\s*:",
+        r"Contrôle à renforcer\s*:",
+        r"Controle a renforcer\s*:",
+        r"Contrôle non conforme\s*:",
+        r"Controle non conforme\s*:",
+        r"VERDICT\s*:\s*\S[^.]*\.",  # e.g. "VERDICT : Insuffisant."
+        r"VERDICT\s*:\s*[^.]*\.",
+        r"D'ÉVALUATION DE CONFORMITÉ",
+        r"D.EVALUATION DE CONFORMITE",
+    ]
+    cleaned = text
+    for pat in VERDICT_PATTERNS:
+        cleaned = _re.sub(pat, "", cleaned, flags=_re.IGNORECASE | _re.UNICODE)
+    # Collapse multiple spaces/newlines
+    cleaned = _re.sub(r"\s{2,}", " ", cleaned).strip()
+    return cleaned
+
+
 def load_text_dataset(standard=None, norme_id=None, source='auto'):
     texts = []
     y = []
+    groups = []   # document_id per sample — used for GroupShuffleSplit to prevent leakage
     source_mode = _normalize_dataset_source(source)
 
     if source_mode == 'evidence':
         samples = _get_labeled_evidence_samples(standard=standard, norme_id=norme_id)
         for sample in samples:
-            text = (sample.evidence_text or '').strip()
+            text = _remove_verdict_markers((sample.evidence_text or '').strip())
             if text:
                 texts.append(text)
                 y.append(1 if _normalize_label_value(sample.label) == 'approved' else 0)
-        return texts, np.array(y, dtype=np.int64)
+                groups.append(int(getattr(sample, 'document_id', 0) or 0))
+        return texts, np.array(y, dtype=np.int64), np.array(groups, dtype=np.int64)
 
     samples = _get_labeled_document_samples(standard=standard, norme_id=norme_id)
     if source_mode == 'auto' and not samples.exists():
         samples = _get_labeled_evidence_samples(standard=standard, norme_id=norme_id)
 
     for sample in samples:
-        # Collect all text fields
         rule_t = getattr(sample, 'rule_text', '') or ''
         ev_t   = getattr(sample, 'evidence_text', '') or ''
         doc_t  = getattr(sample, 'document_text', '') or ''
         text = " ".join(part for part in [rule_t, ev_t, doc_t] if part and part.strip())
+        # Remove verdict markers that trivially encode the label → avoids 100 % accuracy
+        text = _remove_verdict_markers(text)
         if not text.strip():
             continue
         texts.append(text)
-        y.append(1 if _normalize_label_value(sample.label) == 'approved' else 0)
+        y.append(1 if _normalize_label_value(getattr(sample, 'label', '')) == 'approved' else 0)
+        groups.append(int(getattr(sample, 'document_id', 0) or 0))
 
     # Fallback: if no text found in document samples, use RuleTrainingSample evidence texts
     if not texts:
         evidence_samples = _get_labeled_evidence_samples(standard=standard, norme_id=norme_id)
         for sample in evidence_samples:
-            text = (sample.evidence_text or '').strip()
+            text = _remove_verdict_markers((sample.evidence_text or '').strip())
             if text:
                 texts.append(text)
                 y.append(1 if _normalize_label_value(sample.label) == 'approved' else 0)
+                groups.append(int(getattr(sample, 'document_id', 0) or 0))
 
-    return texts, np.array(y, dtype=np.int64)
+    return texts, np.array(y, dtype=np.int64), np.array(groups, dtype=np.int64)
 
 
 def _calculate_class_balance(y):
@@ -810,7 +847,16 @@ def train_all_models(standard=None, norme_id=None, dataset_type='classification'
 
         # Save metrics and skip the binary-vector loop below
         print(f"\n=== Training Complete (TF-IDF pipeline) ===")
-        metrics_path = os.path.join(MODELS_DIR, f"{sanitize_standard(standard or 'default')}_metrics.json")
+        if not standard:
+            print("Warning: standard is None — skipping metrics JSON save to avoid orphan default_metrics.json")
+            return {
+                "results": results,
+                "best_model": best_model_name,
+                "best_accuracy": round(best_accuracy, 4) if best_accuracy >= 0 else None,
+                "samples": len(X_text_for_tfidf),
+                "dataset_size": len(X_text_for_tfidf),
+            }
+        metrics_path = os.path.join(MODELS_DIR, f"{sanitize_standard(standard)}_metrics.json")
         try:
             import json as _json
             metrics_payload = {"results": results, "best_model": best_model_name, "dataset_size": len(X_text_for_tfidf)}
@@ -912,7 +958,7 @@ def train_all_models(standard=None, norme_id=None, dataset_type='classification'
     # computed above so all four algorithms are evaluated on the same hold-out
     # set.  If text data is unavailable we derive it from X (feature vectors)
     # to ensure BiLSTM always uses exactly the same samples.
-    X_text, y_text = load_text_dataset(standard=standard, norme_id=norme_id, source=source_mode)
+    X_text, y_text, groups_text = load_text_dataset(standard=standard, norme_id=norme_id, source=source_mode)
     text_warning = None
     bilstm_trained_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -934,29 +980,63 @@ def train_all_models(standard=None, norme_id=None, dataset_type='classification'
             import time as _time
             _bilstm_start = _time.time()
 
-            # ── Use the same grouped split ────────────────────────────────────
-            # Map text indices to the same train/test split used for RF/LR/GB.
-            # When len(X_text) == len(X) we reuse train_idx / test_idx directly.
-            # When lengths differ (text pipeline filtered some rows) we rebuild
-            # the split on the text dataset using the same seed/strategy.
-            if len(X_text) == len(X):
-                X_text_train = [X_text[i] for i in train_idx]
-                X_text_test  = [X_text[i] for i in test_idx]
-                y_text_train = y_text[train_idx]
-                y_text_test  = y_text[test_idx]
+            # ── Grouped split — prevent same-document leakage ─────────────────
+            # CRITICAL FIX: use GroupShuffleSplit with document_ids (groups_text)
+            # so that all rules from the same document stay in the same split.
+            # Without this, the model sees near-identical texts in both train
+            # and test, inflating all metrics to ~100%.
+            _y_t = np.array(y_text, dtype=np.int64)
+            _g_t = np.array(groups_text, dtype=np.int64)
+            unique_docs = len(np.unique(_g_t))
+
+            if unique_docs >= 6:
+                # GroupShuffleSplit: documents never span train/test boundary
+                _tr_t, _v_t, _te_t = _split_train_validation_test(
+                    np.arange(len(X_text)), _y_t, groups=_g_t
+                )
             else:
-                # Rebuild an equivalent grouped split for the text dataset
-                _y_t   = np.array(y_text, dtype=np.int64)
-                _tr_t, _, _te_t = _split_train_validation_test(
+                # Too few unique documents — fall back to stratified split
+                # (acceptable for very small datasets, note leakage risk)
+                _tr_t, _v_t, _te_t = _split_train_validation_test(
                     np.arange(len(X_text)), _y_t, groups=None
                 )
-                X_text_train = [X_text[i] for i in _tr_t]
-                X_text_test  = [X_text[i] for i in _te_t]
-                y_text_train = _y_t[_tr_t]
-                y_text_test  = _y_t[_te_t]
 
-            bilstm = BiLSTMClassifier()
-            bilstm.fit(X_text_train, y_text_train.tolist(), epochs=5, batch_size=16)
+            X_text_train = [X_text[i] for i in _tr_t]
+            X_text_test  = [X_text[i] for i in _te_t]
+            y_text_train = _y_t[_tr_t]
+            y_text_test  = _y_t[_te_t]
+
+            # ── Leakage guard: abort if same document appears in train AND test ──
+            train_docs_set = set(_g_t[_tr_t].tolist())
+            test_docs_set  = set(_g_t[_te_t].tolist())
+            leaked_docs    = train_docs_set & test_docs_set
+            leakage_rate   = len(leaked_docs) / max(unique_docs, 1)
+            if leakage_rate > 0.05:   # >5% overlap is unacceptable
+                raise ValueError(
+                    f"DATA LEAKAGE DETECTED: {len(leaked_docs)}/{unique_docs} documents "
+                    f"({leakage_rate*100:.1f}%) appear in both train and test sets. "
+                    "Use GroupShuffleSplit or reduce the number of samples per document."
+                )
+
+            print(f"\nBiLSTM split: {len(X_text_train)} train / {len(X_text_test)} test"
+                  f" | {unique_docs} unique documents"
+                  f" | leakage={len(leaked_docs)} docs ({leakage_rate*100:.1f}%)"
+                  f" | grouped={'yes' if unique_docs >= 6 else 'no (too few docs)'}")
+
+            bilstm = BiLSTMClassifier(
+                embedding_dim=128,     # compact embedding keeps training fast
+                hidden_dim=128,        # sufficient hidden capacity for evidence texts
+                num_layers=1,          # single BiLSTM layer — fast, no gradient issues
+                dropout=0.35,          # moderate dropout — prevents memorisation
+                weight_decay=1e-4,     # L2 regularisation via AdamW
+                patience=5,            # early stopping patience on val_loss
+            )
+            # epochs=20 max; early stopping triggers when val_loss plateaus
+            bilstm.fit(
+                X_text_train, y_text_train.tolist(),
+                epochs=20, batch_size=128, lr=1e-3,
+                val_split=0.15,        # internal validation for early stopping
+            )
             y_pred_text = bilstm.predict(X_text_test)
 
             _bilstm_time = round(_time.time() - _bilstm_start, 2)
@@ -1001,10 +1081,12 @@ def train_all_models(standard=None, norme_id=None, dataset_type='classification'
                 "sample_count":      len(X_text),
                 "train_size":        len(X_text_train),
                 "test_size":         len(X_text_test),
+                "unique_documents":  int(unique_docs),
                 "trained_date":      bilstm_trained_at,
                 "training_time":     _bilstm_time,
                 "overfitting_gap":   round(float(overfitting_gap), 4),
                 "overfitting_level": overfitting_level,
+                "split_strategy":    "grouped" if unique_docs >= 6 else "stratified",
                 # BiLSTM does not produce feature_importance or grouped CV
                 "cross_validation":  None,
                 "feature_importance": [],
@@ -1072,7 +1154,18 @@ def train_all_models(standard=None, norme_id=None, dataset_type='classification'
         best_model_name = None  # no model trained successfully
 
     # ── Persist metrics to JSON ───────────────────────────────────────────────
-    metrics_path = os.path.join(MODELS_DIR, f"{sanitize_standard(standard or 'default')}_metrics.json")
+    if not standard:
+        print("Warning: standard is None — skipping metrics JSON save to avoid orphan default_metrics.json")
+        return {
+            "results": results,
+            "best_model": best_model_name,
+            "best_accuracy": round(float(best_accuracy), 4) if best_accuracy >= 0 else None,
+            "samples": len(X),
+            "dataset_size": len(X),
+            "approved_count": int(approved_count),
+            "rejected_count": int(rejected_count),
+        }
+    metrics_path = os.path.join(MODELS_DIR, f"{sanitize_standard(standard)}_metrics.json")
     try:
         import json as _json
         coverage = 0.0
@@ -1091,6 +1184,11 @@ def train_all_models(standard=None, norme_id=None, dataset_type='classification'
             'completeness':  round(_dataset_completeness(X, groups, metadata, feature_names), 2),
             'duplicates':    round(_calculate_duplicate_rate(X), 2),
             'class_balance': round(_calculate_class_balance(y), 4),
+            # leakage_risk: fraction of documents that appear in BOTH train and test sets.
+            # A grouped split produces 0.0 (no overlap). A stratified split on evidence rows
+            # typically shows ~1.0 because each document contributes many rows to both splits.
+            # This is intentionally reported from the feature-vector dataset (not the text split)
+            # and should be read as "document overlap risk in the binary-feature pipeline".
             'leakage_risk':  round(1.0 - (len(np.unique(groups)) / max(len(groups), 1)), 4) if len(groups) else 0.0,
         }
 

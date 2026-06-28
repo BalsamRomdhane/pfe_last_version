@@ -71,9 +71,24 @@ const normalizeModels = (data) => {
           f1_score: metrics.f1_score,
           trained_date: metrics.trained_date,
           sample_count: metrics.sample_count,
+          train_size: metrics.train_size,
+          val_size: metrics.val_size,
+          test_size: metrics.test_size,
           is_best: normalizedName === data.best_model,
           status: normalizedName === data.best_model ? 'Best Model' : 'Trained',
           confusion_matrix: metrics.confusion_matrix,
+          confusion_counts: metrics.confusion_counts,
+          train_metrics: metrics.train_metrics,
+          validation_metrics: metrics.validation_metrics,
+          test_metrics: metrics.test_metrics,
+          overfitting_gap: metrics.overfitting_gap,
+          overfitting_level: metrics.overfitting_level,
+          split_strategy: metrics.split_strategy,
+          unique_documents: metrics.unique_documents,
+          cross_validation: metrics.cross_validation,
+          feature_importance: metrics.feature_importance,
+          pipeline: metrics.pipeline,
+          training_time: metrics.training_time,
           error: metrics.error,
         };
       })
@@ -518,6 +533,9 @@ export default function MLDashboard() {
                       <th className="px-4 py-3 text-center">Precision</th>
                       <th className="px-4 py-3 text-center">Recall</th>
                       <th className="px-4 py-3 text-center">F1 Score</th>
+                      <th className="px-4 py-3 text-center">Overfitting</th>
+                      <th className="px-4 py-3 text-center">Split</th>
+                      <th className="px-4 py-3 text-center">Train / Test</th>
                     </>
                   ) : (
                     <>
@@ -552,6 +570,34 @@ export default function MLDashboard() {
                             </td>
                             <td className="px-4 py-4 text-center text-slate-700">
                               {hasTrained ? formatPercent(model.f1_score) : '—'}
+                            </td>
+                            <td className="px-4 py-4 text-center">
+                              {hasTrained && model.overfitting_gap != null ? (
+                                <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
+                                  (model.overfitting_level || (model.overfitting_gap >= 0.15 ? 'HIGH' : model.overfitting_gap >= 0.08 ? 'MEDIUM' : 'LOW')) === 'HIGH'
+                                    ? 'bg-red-100 text-red-700'
+                                    : (model.overfitting_level || 'LOW') === 'MEDIUM'
+                                    ? 'bg-amber-100 text-amber-700'
+                                    : 'bg-emerald-100 text-emerald-700'
+                                }`}>
+                                  {model.overfitting_level || (model.overfitting_gap >= 0.15 ? 'HIGH' : model.overfitting_gap >= 0.08 ? 'MEDIUM' : 'LOW')}
+                                  {' '}({model.overfitting_gap >= 0 ? '+' : ''}{(model.overfitting_gap * 100).toFixed(1)}%)
+                                </span>
+                              ) : '—'}
+                            </td>
+                            <td className="px-4 py-4 text-center">
+                              {model.split_strategy ? (
+                                <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
+                                  model.split_strategy === 'grouped' ? 'bg-sky-100 text-sky-700' : 'bg-slate-100 text-slate-600'
+                                }`}>
+                                  {model.split_strategy}
+                                </span>
+                              ) : <span className="text-xs text-slate-400">stratified</span>}
+                            </td>
+                            <td className="px-4 py-4 text-center text-xs text-slate-600">
+                              {hasTrained && (model.train_size || model.test_size) ? (
+                                <span>{(model.train_size || 0).toLocaleString()} / {(model.test_size || 0).toLocaleString()}</span>
+                              ) : '—'}
                             </td>
                           </>
                         ) : (
@@ -590,7 +636,7 @@ export default function MLDashboard() {
                   })
                 ) : (
                   <tr>
-                    <td colSpan={datasetType === "classification" ? "7" : "5"} className="px-4 py-8 text-center text-slate-500">No models available</td>
+                    <td colSpan={datasetType === "classification" ? "10" : "5"} className="px-4 py-8 text-center text-slate-500">No models available</td>
                   </tr>
                 )}
               </tbody>
@@ -629,6 +675,23 @@ export default function MLDashboard() {
               <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
                 <div className="rounded-2xl border border-slate-200 bg-white p-5">
                   <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-500">Selected model metrics</h3>
+
+                  {/* Warning for suspiciously perfect metrics */}
+                  {isModelTrained(selectedModel) && selectedModel?.accuracy >= 0.99 && (
+                    <div className="mt-3 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                      <span className="text-amber-600 mt-0.5">⚠️</span>
+                      <div>
+                        <p className="text-xs font-semibold text-amber-800">Métriques suspectes ≥ 99%</p>
+                        <p className="text-xs text-amber-700 mt-0.5">
+                          Des métriques parfaites indiquent souvent un data leakage ou des données synthétiques avec des marqueurs de verdict dans le texte.
+                          Vérifier : split_strategy=<strong>{selectedModel?.split_strategy || 'N/A'}</strong>, 
+                          unique_docs=<strong>{selectedModel?.unique_documents ?? 'N/A'}</strong>, 
+                          overfitting_gap=<strong>{selectedModel?.overfitting_gap != null ? `${(selectedModel.overfitting_gap*100).toFixed(1)}%` : 'N/A'}</strong>
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="mt-4 grid gap-3 sm:grid-cols-2">
                     <div className="rounded-2xl bg-slate-50 p-4">
                       <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Accuracy</p>
@@ -666,7 +729,21 @@ export default function MLDashboard() {
                       </div>
                     </div>
                   )}
-                </div>
+
+                  {/* Split and overfitting details */}
+                  <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-2">
+                    <p className="text-xs uppercase tracking-[0.2em] text-slate-500 mb-2">Validation Details</p>
+                    <div className="grid gap-2 sm:grid-cols-2 text-sm text-slate-700">
+                      <div><span className="font-medium">Split strategy:</span> {selectedModel?.split_strategy || 'stratified'}</div>
+                      <div><span className="font-medium">Unique documents:</span> {selectedModel?.unique_documents ?? '—'}</div>
+                      <div><span className="font-medium">Train samples:</span> {selectedModel?.train_size?.toLocaleString() ?? '—'}</div>
+                      <div><span className="font-medium">Test samples:</span> {selectedModel?.test_size?.toLocaleString() ?? '—'}</div>
+                      <div><span className="font-medium">Overfitting gap:</span> {selectedModel?.overfitting_gap != null ? `${(selectedModel.overfitting_gap * 100).toFixed(2)}%` : '—'}</div>
+                      <div><span className="font-medium">Overfitting level:</span> {selectedModel?.overfitting_level || '—'}</div>
+                      <div><span className="font-medium">Pipeline:</span> {selectedModel?.pipeline || '—'}</div>
+                      <div><span className="font-medium">Training time:</span> {selectedModel?.training_time != null ? `${selectedModel.training_time}s` : '—'}</div>
+                    </div>
+                  </div>                </div>
 
                 <div className="rounded-2xl border border-slate-200 bg-white p-5">
                   <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-500">Confusion matrix</h3>

@@ -1119,6 +1119,83 @@ def dataset_stats_api(request):
     })
 
 
+def _persist_training_result(standard: str, result: dict) -> None:
+    """Persist a local training run to TrainingJob + MLOpsConfig.
+
+    This is the single-source-of-truth write path for API-triggered training.
+    It mirrors what ci/update_training_job.py does for Jenkins-triggered runs.
+
+    Fields written:
+    - TrainingJob: status, f1_score, precision_score, recall_score, accuracy,
+                   avg_similarity (compat alias), model_version, documents_count,
+                   dataset_size, triggered_by='api'
+    - MLOpsConfig: last_trained_at, last_trained_doc_count, current_model_version,
+                   last_f1_score, dataset_size, training_count (incremented)
+    """
+    from django.utils import timezone as _tz
+    from django.db.models import F as _F
+
+    if not standard or not result or 'error' in result:
+        return
+
+    # Identify best model from result
+    best_name = result.get('best_model') or ''
+    results   = result.get('results', {})
+    bm        = results.get(best_name, {}) if best_name and best_name != 'Tie' else {}
+
+    # Fallback: pick model with highest f1
+    if not bm:
+        for m in results.values():
+            if not m.get('error') and m.get('f1_score'):
+                if not bm or (m.get('f1_score', 0) > bm.get('f1_score', 0)):
+                    bm = m
+
+    f1        = float(bm.get('f1_score', 0.0) or 0.0)
+    precision = float(bm.get('precision', 0.0) or 0.0)
+    recall    = float(bm.get('recall', 0.0) or 0.0)
+    accuracy  = float(bm.get('accuracy', 0.0) or 0.0)
+    samples   = int(result.get('dataset_size') or result.get('samples') or 0)
+
+    try:
+        job = TrainingJob.objects.create(
+            standard=standard,
+            status='success',
+            start_time=_tz.now(),
+            end_time=_tz.now(),
+            documents_count=samples,
+            dataset_size=samples,
+            new_docs_since=0,
+            f1_score=f1,
+            precision_score=precision,
+            recall_score=recall,
+            accuracy=accuracy,
+            avg_similarity=accuracy,   # compat alias read by older frontend code
+            model_version=best_name,
+            triggered_by='api',
+            drift_report={},
+            log_output=f'API local training | {standard} | best={best_name} | f1={f1:.4f}',
+        )
+
+        cfg, _ = MLOpsConfig.objects.get_or_create(
+            standard=standard,
+            defaults={'retraining_threshold': int(os.getenv('MLOPS_RETRAINING_THRESHOLD', '10'))},
+        )
+        MLOpsConfig.objects.filter(standard=standard).update(
+            last_trained_at=_tz.now(),
+            last_trained_doc_count=samples,
+            current_model_version=best_name,
+            last_f1_score=f1,
+            dataset_size=samples,
+            training_count=_F('training_count') + 1,
+        )
+        logger.info(
+            '_persist_training_result: standard=%s best=%s f1=%.4f job_id=%s',
+            standard, best_name, f1, job.id,
+        )
+    except Exception as exc:
+        logger.warning('_persist_training_result failed: %s', exc)
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, IsAdmin])
 def ml_train_api(request):
@@ -1151,6 +1228,13 @@ def ml_train_api(request):
         )
         if 'error' in result:
             return Response(result, status=status.HTTP_400_BAD_REQUEST)
+
+        # ── Persist training outcome to DB (single source of truth) ──────────
+        # This mirrors what ci/update_training_job.py does for Jenkins runs,
+        # ensuring that local (API-triggered) training is also reflected in
+        # MLOps dashboard, AIInsights timeline, and StandardCard metrics.
+        _persist_training_result(standard, result)
+
         return Response(result)
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
@@ -1294,6 +1378,13 @@ def ml_models_api(request):
                 'pipeline':          pm.get('pipeline'),
                 'overfitting_gap':   pm.get('overfitting_gap'),
                 'overfitting_level': pm.get('overfitting_level') or pm.get('overfitting_risk'),
+                # Anti-leakage validation fields (new)
+                'split_strategy':    pm.get('split_strategy'),
+                'unique_documents':  pm.get('unique_documents'),
+                'confusion_counts':  pm.get('confusion_counts'),
+                'train_metrics':     pm.get('train_metrics'),
+                'validation_metrics': pm.get('validation_metrics'),
+                'test_metrics':      pm.get('test_metrics'),
             }
 
     models_list = list(model_info.values())
@@ -3875,20 +3966,28 @@ def mlops_status_api(request):
             'current_model_version': effective_model_version or None,
             'retraining_threshold': threshold,
             'auto_trigger_enabled': cfg.auto_trigger_enabled,
-            # Metrics from last successful job (authoritative)
-            'last_f1_score': effective_f1 if effective_f1 else None,
+            'training_count': cfg.training_count,
+            # Metrics from last successful job — single source of truth
+            'last_f1_score':    effective_f1 if effective_f1 else None,
             'last_drift_score': effective_drift if effective_drift else None,
-            # Counts based on RuleTrainingSample (what the pipeline trains on)
-            'total_samples': total_samples,
-            'labeled_samples': labeled_samples,
-            'new_samples': new_samples,
-            # Legacy field kept for compatibility: raw document uploads
-            'total_documents': doc_info.get('total_documents', 0),
-            'new_documents': new_samples,
-            'needs_training': needs_training,
-            'drift': drift_info,
+            # Counts based on RuleTrainingSample (what the pipeline trains on).
+            # FIX #3: total_documents == labeled_samples so MLOps and ML Dashboard
+            # always show the same number without frontend fallback chains.
+            'total_samples':    labeled_samples,     # labeled RuleTrainingSample rows
+            'labeled_samples':  labeled_samples,     # alias (used by StandardCard)
+            'total_documents':  labeled_samples,     # legacy alias — now identical to labeled_samples
+            'new_samples':      new_samples,
+            'new_documents':    new_samples,         # legacy alias
+            'needs_training':   needs_training,
+            'drift':            drift_info,
             # Full last job details for the detail panel
-            'last_job': last_job_data,
+            'last_job':         last_job_data,
+            # Expose last-job precision/recall/accuracy at the standard level
+            # so MLOps StandardCard can show them without reading last_job.*
+            'last_precision':   last_job_data['precision_score'] if last_job_data else None,
+            'last_recall':      last_job_data['recall_score']    if last_job_data else None,
+            'last_accuracy':    (last_job_data['accuracy'] or last_job_data['avg_similarity'])
+                                if last_job_data else None,
         })
 
     # Recent jobs — strip any with standard='' or clearly garbage data
@@ -4330,13 +4429,22 @@ def ai_overview_api(request):
                     'precision': metrics.get('precision'),
                     'recall': metrics.get('recall'),
                     'training_time': metrics.get('training_time'),
-                    'trained_at': trained_at,
+                    'trained_at': metrics.get('trained_date') or trained_at,
                     'is_best': (algo == best_in_std),
                     'error': metrics.get('error'),
                     'feature_importance': metrics.get('feature_importance') or [],
                     'cross_validation': metrics.get('cross_validation'),
                     'confusion_matrix': metrics.get('confusion_matrix'),
                     'sample_count': metrics.get('sample_count'),
+                    # Anti-leakage validation fields
+                    'split_strategy':   metrics.get('split_strategy'),
+                    'unique_documents': metrics.get('unique_documents'),
+                    'overfitting_gap':  metrics.get('overfitting_gap'),
+                    'overfitting_level': metrics.get('overfitting_level') or metrics.get('overfitting_risk'),
+                    'train_size':       metrics.get('train_size'),
+                    'val_size':         metrics.get('val_size'),
+                    'test_size':        metrics.get('test_size'),
+                    'pipeline':         metrics.get('pipeline'),
                 })
                 if f1 is not None and float(f1) > best_f1_overall:
                     best_f1_overall = float(f1)
@@ -4371,8 +4479,12 @@ def ai_overview_api(request):
     avg_drift = TrainingJob.objects.filter(status='success').aggregate(avg=Avg('drift_score'))['avg']
 
     # ── Drift per standard ────────────────────────────────────────────────
+    # FIX #4: compute drift for ALL standards (not just 3) so ai/overview and
+    # mlops/status show the same drift values. We cache the result per-request
+    # using a dict; no external cache needed since the endpoint is already
+    # called at most once per page load.
     drift_by_standard = {}
-    for std in standards[:3]:  # limit to 3 to avoid slow response
+    for std in standards:
         try:
             drift_by_standard[std] = compute_drift_score(std)
         except Exception:
@@ -4403,9 +4515,10 @@ def ai_overview_api(request):
         llm_status = {'available': False, 'reason': 'Error checking Ollama'}
 
     # ── MLOps configs ────────────────────────────────────────────────────
+    # FIX: include training_count and dataset_size (now reliably updated).
     configs = list(MLOpsConfig.objects.all().values(
         'standard', 'last_trained_at', 'current_model_version',
-        'last_f1_score', 'last_drift_score', 'training_count', 'dataset_size'
+        'last_f1_score', 'last_drift_score', 'training_count', 'dataset_size',
     ))
 
     # ── Timeline events (training + drift significant events) ─────────────

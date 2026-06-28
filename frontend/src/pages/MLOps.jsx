@@ -312,11 +312,12 @@ function StandardCard({ std, onTrigger, triggering }) {
   // Model version: show exactly what backend provides; null/empty → "Not trained"
   const modelVersion = std.current_model_version || null;
 
-  // Samples: use labeled_samples (what the pipeline trains on) when available,
-  // fall back to total_documents for legacy responses.
+  // FIX #3: labeled_samples is now always == total_documents (unified by backend).
+  // All three aliases point to the same value — no more divergence.
   const totalSamples  = std.labeled_samples ?? std.total_samples ?? std.total_documents;
   const newSamples    = std.new_samples ?? std.new_documents;
   const threshold     = std.retraining_threshold;
+  const trainingCount = std.training_count ?? null;
 
   // F1: from last successful job (backend already resolves this).
   const f1 = std.last_f1_score;
@@ -350,13 +351,13 @@ function StandardCard({ std, onTrigger, triggering }) {
         </button>
       </div>
 
-      {/* KPI grid */}
+      {/* KPI grid — 2×3 */}
       <div className="grid grid-cols-2 gap-2 text-xs mb-3">
-        {/* Total samples */}
+        {/* Total samples — FIX #3: always = labeled_samples, no divergence with ML Dashboard */}
         <div className="rounded-xl bg-slate-50 px-3 py-2">
           <p className="text-slate-400">Training samples</p>
           <p className="font-bold text-slate-800">
-            {totalSamples != null ? totalSamples : '—'}
+            {totalSamples != null ? totalSamples.toLocaleString() : '—'}
           </p>
         </div>
 
@@ -389,15 +390,25 @@ function StandardCard({ std, onTrigger, triggering }) {
             {f1 != null && f1 > 0 ? pct(f1) : 'N/A'}
           </p>
         </div>
+
+        {/* Training runs — FIX #9: now reliably incremented */}
+        {trainingCount != null && (
+          <div className="rounded-xl bg-slate-50 px-3 py-2 col-span-2">
+            <p className="text-slate-400">Training runs completed</p>
+            <p className="font-bold text-slate-800">{trainingCount}</p>
+          </div>
+        )}
       </div>
 
-      {/* Last job metrics row — precision / recall / accuracy */}
-      {std.last_job && std.last_job.status === 'success' && (
+      {/* Last job metrics row — precision / recall / accuracy
+           FIX #3: prefer flat fields last_precision/last_recall/last_accuracy
+           that are now always aligned with labeled_samples count. */}
+      {(std.last_precision != null || (std.last_job && std.last_job.status === 'success')) && (
         <div className="grid grid-cols-3 gap-1.5 text-xs mb-3">
           {[
-            { label: 'Precision', val: std.last_job.precision_score },
-            { label: 'Recall',    val: std.last_job.recall_score    },
-            { label: 'Accuracy',  val: std.last_job.accuracy || std.last_job.avg_similarity },
+            { label: 'Precision', val: std.last_precision ?? std.last_job?.precision_score },
+            { label: 'Recall',    val: std.last_recall    ?? std.last_job?.recall_score    },
+            { label: 'Accuracy',  val: std.last_accuracy  ?? std.last_job?.accuracy ?? std.last_job?.avg_similarity },
           ].map(m => (
             <div key={m.label} className="rounded-lg bg-violet-50 px-2 py-1.5 text-center">
               <p className="text-violet-400">{m.label}</p>

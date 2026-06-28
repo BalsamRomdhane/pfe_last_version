@@ -1039,7 +1039,7 @@ function ComparisonTab({ data, loading }) {
           <table className="min-w-full text-xs">
             <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider">
               <tr>
-                {['Standard', 'Dernier entraînement', 'Version modèle', 'F1', 'Drift', 'Dataset', 'Action'].map(h => (
+                {['Standard', 'Dernier entraînement', 'Version modèle', 'F1', 'Drift', 'Samples', 'Runs', 'Action'].map(h => (
                   <th key={h} className="px-4 py-2 text-left font-semibold">{h}</th>
                 ))}
               </tr>
@@ -1064,7 +1064,9 @@ function ComparisonTab({ data, loading }) {
                       {cfg.last_drift_score ? pct(cfg.last_drift_score * 100, 1) : '—'}
                     </span>
                   </td>
+                  {/* FIX #3/#9: dataset_size and training_count now reliably set */}
                   <td className="px-4 py-3 text-slate-600">{num(cfg.dataset_size)}</td>
+                  <td className="px-4 py-3 text-slate-600 text-center">{cfg.training_count ?? '—'}</td>
                   <td className="px-4 py-3">
                     <button
                       onClick={() => handleTrigger(cfg.standard)}
@@ -1112,11 +1114,13 @@ function ComparisonTab({ data, loading }) {
                 <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${Math.min(algos.length, 4)}, 1fr)` }}>
                   {algos.map(algo => {
                     const m = getModel(std, algo);
+                    const isSupect = m && !m.error && (m.accuracy >= 0.99 || m.f1_score >= 0.99);
                     return (
-                      <div key={algo} className={`rounded-2xl border p-3 ${m?.is_best ? 'border-violet-300 bg-violet-50' : 'border-slate-100 bg-slate-50'}`}>
+                      <div key={algo} className={`rounded-2xl border p-3 ${m?.is_best ? 'border-violet-300 bg-violet-50' : isSupect ? 'border-amber-300 bg-amber-50' : 'border-slate-100 bg-slate-50'}`}>
                         <div className="flex items-center justify-between mb-2">
                           <p className="text-xs font-bold text-slate-800">{algo}</p>
-                          {m?.is_best && <Star size={12} className="text-violet-500 fill-violet-500" />}
+                          {m?.is_best && !isSupect && <Star size={12} className="text-violet-500 fill-violet-500" />}
+                          {isSupect && <span title="Métriques ≥99% — possible leakage" className="text-amber-500 text-[10px]">⚠️</span>}
                         </div>
                         {m && !m.error ? (
                           <div className="space-y-1">
@@ -1124,13 +1128,37 @@ function ComparisonTab({ data, loading }) {
                               <div key={met.key}>
                                 <div className="flex justify-between text-[10px] mb-0.5">
                                   <span className="text-slate-400">{met.label}</span>
-                                  <span className="font-semibold">{m[met.key] != null ? pct(m[met.key] * 100, 1) : '—'}</span>
+                                  <span className={`font-semibold ${isSupect ? 'text-amber-700' : ''}`}>
+                                    {m[met.key] != null ? pct(m[met.key] * 100, 1) : '—'}
+                                  </span>
                                 </div>
                                 <ProgressBar value={(m[met.key] ?? 0) * 100} max={100}
-                                  color={m[met.key] >= 0.8 ? 'bg-emerald-500' : m[met.key] >= 0.6 ? 'bg-amber-400' : 'bg-rose-400'}
+                                  color={isSupect ? 'bg-amber-400' : m[met.key] >= 0.8 ? 'bg-emerald-500' : m[met.key] >= 0.6 ? 'bg-amber-400' : 'bg-rose-400'}
                                   h="h-1" />
                               </div>
                             ))}
+                            {/* Anti-leakage validation badges */}
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              {m.split_strategy && (
+                                <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${m.split_strategy === 'grouped' ? 'bg-sky-100 text-sky-700' : 'bg-slate-200 text-slate-600'}`}>
+                                  {m.split_strategy}
+                                </span>
+                              )}
+                              {m.overfitting_gap != null && (
+                                <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${
+                                  Math.abs(m.overfitting_gap) >= 0.15 ? 'bg-red-100 text-red-700' :
+                                  Math.abs(m.overfitting_gap) >= 0.08 ? 'bg-amber-100 text-amber-700' :
+                                  'bg-emerald-100 text-emerald-700'
+                                }`}>
+                                  ovf: {m.overfitting_gap >= 0 ? '+' : ''}{(m.overfitting_gap * 100).toFixed(1)}%
+                                </span>
+                              )}
+                              {m.train_size != null && m.test_size != null && (
+                                <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[9px] text-slate-600">
+                                  {m.train_size.toLocaleString()}/{m.test_size.toLocaleString()}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         ) : (
                           <p className="text-[10px] text-slate-400">{m?.error || 'Non entraîné'}</p>
