@@ -101,11 +101,11 @@ if (-not $BackendOnly) {
 
 # ── Step 4 : Start Backend ────────────────────────────────────────────────
 if (-not $FrontendOnly) {
-    Write-Step "4/5" "Starting Django backend on port $BackendPort..."
-    $backendCmd = "Set-Location '$Backend'; & '$Python' manage.py runserver 0.0.0.0:$BackendPort"
+    Write-Step "4/5" "Starting Django backend on port $BackendPort (Daphne ASGI - WebSocket support)..."
+    $backendCmd = "Set-Location '$Backend'; & '$Python' -m daphne -b 0.0.0.0 -p $BackendPort enterprise_platform.asgi:application"
     Start-Process powershell -ArgumentList "-NoExit", "-Command", $backendCmd -WindowStyle Normal
     Start-Sleep -Seconds 2
-    Write-OK "Backend started -> http://localhost:$BackendPort"
+    Write-OK "Backend started (Daphne ASGI) -> http://localhost:$BackendPort"
 }
 
 # ── Step 5 : Start Frontend ───────────────────────────────────────────────

@@ -47,9 +47,9 @@ cd /d "%BACKEND%"
 "%VENV%\python.exe" manage.py migrate --run-syncdb 2>&1 | findstr /V "^$" | findstr /V "Applying\|OK\|No migrations"
 echo       [OK] Base de données synchronisée.
 
-:: ── 4. Lancer Django backend ──────────────────────────────────────────────
-echo [4/5] Démarrage du backend Django (port 8000)...
-start "Django Backend" cmd /k "chcp 65001 > nul && cd /d %BACKEND% && %VENV%\python.exe manage.py runserver 0.0.0.0:8000"
+:: Lancer Django backend avec Daphne (ASGI - support WebSocket)
+echo [4/5] Démarrage du backend Django/Daphne (port 8000)...
+start "Django Backend (Daphne)" cmd /k "chcp 65001 > nul && cd /d %BACKEND% && %VENV%\python.exe -m daphne -b 0.0.0.0 -p 8000 enterprise_platform.asgi:application"
 timeout /t 2 > nul
 
 :: ── 5. Lancer React frontend ──────────────────────────────────────────────
