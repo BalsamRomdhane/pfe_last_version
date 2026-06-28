@@ -247,7 +247,8 @@ def get_jenkins_last_build() -> Dict[str, Any]:
         return {'error': str(exc)}
 
 
-
+# ── Document/sample counting ─────────────────────────────────────────────────
+def count_new_documents(standard: str) -> Dict[str, Any]:
     """Return count of labeled RuleTrainingSamples added since last training.
 
     This is the authoritative "new docs" metric because the ML pipeline trains
