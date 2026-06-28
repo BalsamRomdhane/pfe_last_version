@@ -1,161 +1,116 @@
 import React, { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import {
-  Box,
-  Card,
-  TextField,
-  Button,
-  Typography,
-  Alert,
-  CircularProgress,
-  Container,
-} from '@mui/material';
+import { ShieldCheck, Eye, EyeOff, AlertCircle, CheckCircle2, ArrowRight } from 'lucide-react';
 import api from '../services/api';
-import logoImage from '../Capgemini_Logo.png';
-
-const CAPGEMINI_BLUE = '#0070AD';
 
 const ResetPassword = () => {
-  const navigate = useNavigate();
-  const location = useLocation();
-  const searchParams = new URLSearchParams(location.search);
-  const token = searchParams.get('token') || '';
+  const navigate  = useNavigate();
+  const location  = useLocation();
+  const token     = new URLSearchParams(location.search).get('token') || '';
 
-  const [formData, setFormData] = useState({
-    new_password: '',
-    confirm_password: '',
-  });
+  const [form,    setForm]    = useState({ new_password: '', confirm_password: '' });
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [error,   setError]   = useState('');
   const [success, setSuccess] = useState('');
+  const [showPw,  setShowPw]  = useState({ new: false, confirm: false });
 
   const handleChange = (e) => {
     const { name, value } = e.target;
-    setFormData((prev) => ({ ...prev, [name]: value }));
+    setForm(prev => ({ ...prev, [name]: value }));
     if (error) setError('');
-    if (success) setSuccess('');
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setError('');
-    setSuccess('');
-
-    if (!token) {
-      setError('Le jeton de réinitialisation est manquant ou invalide.');
-      return;
-    }
-
-    if (!formData.new_password || !formData.confirm_password) {
-      setError('Veuillez saisir et confirmer le nouveau mot de passe.');
-      return;
-    }
-
-    if (formData.new_password !== formData.confirm_password) {
-      setError('Les mots de passe ne correspondent pas.');
-      return;
-    }
-
+    setError(''); setSuccess('');
+    if (!token)                                          return setError('Reset token is missing or invalid.');
+    if (!form.new_password || !form.confirm_password)   return setError('Please fill in both password fields.');
+    if (form.new_password !== form.confirm_password)    return setError('Passwords do not match.');
     setLoading(true);
-
     try {
-      const response = await api.post('/auth/reset-password/', {
+      const res = await api.post('/auth/reset-password/', {
         token,
-        new_password: formData.new_password,
-        confirm_password: formData.confirm_password,
+        new_password: form.new_password,
+        confirm_password: form.confirm_password,
       });
-
-      setSuccess(response.data?.message || 'Votre mot de passe a été mis à jour avec succès.');
-      setTimeout(() => {
-        navigate('/login');
-      }, 1500);
+      setSuccess(res.data?.message || 'Password updated successfully.');
+      setTimeout(() => navigate('/login'), 1800);
     } catch (err) {
-      const detail = err.response?.data?.detail;
-      const message = err.response?.data?.error || detail || 'Impossible de réinitialiser le mot de passe.';
-      setError(message);
-    } finally {
-      setLoading(false);
-    }
+      setError(err.response?.data?.detail || err.response?.data?.error || 'Unable to reset password.');
+    } finally { setLoading(false); }
   };
 
   return (
-    <Box
-      sx={{
-        minHeight: '100vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: `linear-gradient(135deg, ${CAPGEMINI_BLUE} 0%, #0052A3 100%)`,
-        padding: 2,
-      }}
-    >
-      <Container maxWidth="sm">
-        <Card
-          sx={{
-            borderRadius: 3,
-            boxShadow: '0 20px 60px rgba(0, 0, 0, 0.25)',
-            padding: 4,
-            background: 'white',
-          }}
-        >
-          <Box sx={{ textAlign: 'center', mb: 3 }}>
-            <Box
-              component="img"
-              src={logoImage}
-              alt="Capgemini Logo"
-              sx={{ width: 120, height: 80, mx: 'auto' }}
-            />
-            <Typography variant="h5" sx={{ fontWeight: 700, color: '#1a1a1a', mb: 1 }}>
-              Réinitialisation de mot de passe
-            </Typography>
-            <Typography variant="body2" sx={{ color: '#666', fontSize: '14px' }}>
-              Entrez un nouveau mot de passe pour continuer.
-            </Typography>
-          </Box>
+    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
+      <div className="pointer-events-none fixed inset-0 overflow-hidden">
+        <div className="absolute -left-32 top-1/4 h-96 w-96 rounded-full bg-brand-600/10 blur-3xl" />
+      </div>
 
-          {error && (
-            <Alert severity="error" sx={{ mb: 2, borderRadius: 2 }}>
-              {error}
-            </Alert>
-          )}
-          {success && (
-            <Alert severity="success" sx={{ mb: 2, borderRadius: 2 }}>
-              {success}
-            </Alert>
-          )}
+      <div className="relative w-full max-w-md animate-fade-in">
+        <div className="rounded-2xl border border-white/[0.08] bg-white/[0.04] p-8 shadow-2xl backdrop-blur-xl">
 
-          <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
-            <TextField
-              fullWidth
-              label="Nouveau mot de passe"
-              name="new_password"
-              type="password"
-              value={formData.new_password}
-              onChange={handleChange}
-              disabled={loading}
-              autoComplete="new-password"
-              variant="outlined"
-            />
+          {/* Brand */}
+          <div className="flex flex-col items-center gap-4 mb-8">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-brand-600 shadow-lg shadow-brand-600/30">
+              <ShieldCheck size={28} className="text-white" />
+            </div>
+            <div className="text-center">
+              <h1 className="text-2xl font-bold text-white">Reset Password</h1>
+              <p className="text-sm text-slate-400 mt-1">Enter your new password below.</p>
+            </div>
+          </div>
 
-            <TextField
-              fullWidth
-              label="Confirmer le mot de passe"
-              name="confirm_password"
-              type="password"
-              value={formData.confirm_password}
-              onChange={handleChange}
-              disabled={loading}
-              autoComplete="new-password"
-              variant="outlined"
-            />
+          {error   && <div className="flex gap-2 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 mb-5"><AlertCircle size={15} className="text-red-400 shrink-0 mt-0.5"/><p className="text-sm text-red-300">{error}</p></div>}
+          {success && <div className="flex gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 mb-5"><CheckCircle2 size={15} className="text-emerald-400 shrink-0 mt-0.5"/><p className="text-sm text-emerald-300">{success}</p></div>}
 
-            <Button type="submit" variant="contained" size="large" disabled={loading} sx={{ bgcolor: CAPGEMINI_BLUE }}>
-              {loading ? <CircularProgress size={20} color="inherit" /> : 'Modifier mon mot de passe'}
-            </Button>
-          </Box>
-        </Card>
-      </Container>
-    </Box>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {[
+              { id: 'new_password',     label: 'New password',     key: 'new'     },
+              { id: 'confirm_password', label: 'Confirm password', key: 'confirm' },
+            ].map(f => (
+              <div key={f.id}>
+                <label htmlFor={f.id} className="block text-sm font-medium text-slate-300 mb-1.5">{f.label}</label>
+                <div className="relative">
+                  <input
+                    id={f.id}
+                    name={f.id}
+                    type={showPw[f.key] ? 'text' : 'password'}
+                    value={form[f.id]}
+                    onChange={handleChange}
+                    disabled={loading}
+                    autoComplete={f.id === 'new_password' ? 'new-password' : 'new-password'}
+                    className="w-full rounded-xl border border-white/10 bg-white/[0.06] px-4 py-2.5 pr-11 text-sm text-white
+                               focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 outline-none transition-all
+                               disabled:opacity-50"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPw(prev => ({ ...prev, [f.key]: !prev[f.key] }))}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
+                  >
+                    {showPw[f.key] ? <EyeOff size={16}/> : <Eye size={16}/>}
+                  </button>
+                </div>
+              </div>
+            ))}
+
+            <button
+              type="submit"
+              disabled={loading || !form.new_password || !form.confirm_password}
+              className="w-full flex items-center justify-center gap-2 rounded-xl bg-brand-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg transition-all hover:bg-brand-500 disabled:opacity-50 mt-2"
+            >
+              {loading ? (
+                <><span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white"/>Updating…</>
+              ) : (
+                <>Update Password <ArrowRight size={15}/></>
+              )}
+            </button>
+          </form>
+
+          <p className="mt-8 text-center text-xs text-slate-600">© {new Date().getFullYear()} Enterprise Compliance Platform</p>
+        </div>
+      </div>
+    </div>
   );
 };
 

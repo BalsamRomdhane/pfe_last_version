@@ -1,318 +1,451 @@
-import React, { useContext } from 'react';
+import React, { useContext, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { UserContext } from '../context/UserContext';
+import { useNotifications } from '../context/NotificationContext';
 import Layout from './Layout';
+import api from '../services/api';
 import {
-  Users,
-  Building,
-  Activity,
-  CheckCircle,
-  ArrowRight,
-  ShieldCheck,
-  Sparkles,
-  BarChart3,
-  Bell,
-  FileText,
-  ClipboardCheck,
-  ClipboardList,
+  Users, Building2, Activity, ShieldCheck, FileText,
+  ClipboardCheck, BookOpen, ArrowRight, Bell,
+  TrendingUp, CheckCircle2,
 } from 'lucide-react';
 
-const statCards = [
-  {
-    title: 'Total Users',
-    value: '4',
-    description: 'Users currently registered',
-    icon: Users,
-    tone: 'blue',
-  },
-  {
-    title: 'Departments',
-    value: '4',
-    description: 'Active corporate divisions',
-    icon: Building,
-    tone: 'orange',
-  },
-  {
-    title: 'Active Sessions',
-    value: '1',
-    description: 'Currently signed in users',
-    icon: Activity,
-    tone: 'emerald',
-  },
-  {
-    title: 'System Health',
-    value: 'Online',
-    description: 'Operational status',
-    icon: CheckCircle,
-    tone: 'teal',
-  },
-];
+/* ─── Skeleton ──────────────────────────────────────────────────────────── */
+function SkeletonCard() {
+  return (
+    <div className="kpi-card animate-pulse">
+      <div className="flex items-start justify-between gap-3">
+        <div className="space-y-2 flex-1">
+          <div className="skeleton h-3 w-20" />
+          <div className="skeleton h-8 w-16" />
+          <div className="skeleton h-3 w-28" />
+        </div>
+        <div className="skeleton h-10 w-10 rounded-lg" />
+      </div>
+    </div>
+  );
+}
 
-const insights = [
-  {
-    label: 'Login success rate',
-    value: '98.7%',
-    percentage: 94,
-    status: 'success',
-  },
-  {
-    label: 'Password resets',
-    value: '12 this week',
-    percentage: 45,
-    status: 'warning',
-  },
-  {
-    label: 'Pending approvals',
-    value: '3 items',
-    percentage: 32,
-    status: 'critical',
-  },
-];
+/* ─── KPI Card ──────────────────────────────────────────────────────────── */
+function KpiCard({ icon: Icon, label, value, sub, color, bg, loading }) {
+  return (
+    <div className="kpi-card group transition-all duration-200 hover:shadow-card-hover hover:-translate-y-px">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="kpi-label">{label}</p>
+          <p className="kpi-value mt-2">
+            {loading ? <span className="skeleton h-8 w-16 inline-block" /> : value}
+          </p>
+          {sub && <p className="mt-1.5 text-xs text-slate-500">{sub}</p>}
+        </div>
+        <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${bg}`}>
+          <Icon size={18} className={color} />
+        </div>
+      </div>
+    </div>
+  );
+}
 
-const activityFeed = [
-  { id: 1, title: 'New admin profile created', time: '10m ago' },
-  { id: 2, title: 'Department structure updated', time: '1h ago' },
-  { id: 3, title: 'Password reset link issued', time: 'Yesterday' },
-];
+/* ─── Quick action card ─────────────────────────────────────────────────── */
+function ActionCard({ title, description, icon: Icon, link, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="card group flex items-center gap-4 p-4 text-left transition-all duration-200 hover:shadow-card-hover hover:-translate-y-px w-full"
+    >
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-600 group-hover:bg-brand-100 transition-colors">
+        <Icon size={18} />
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-semibold text-slate-900 group-hover:text-brand-700 transition-colors">
+          {title}
+        </p>
+        <p className="text-xs text-slate-500 truncate mt-0.5">{description}</p>
+      </div>
+      <ArrowRight size={14} className="text-slate-400 group-hover:text-brand-600 group-hover:translate-x-0.5 transition-all shrink-0" />
+    </button>
+  );
+}
 
-const HeaderBadge = ({ label, value }) => (
-  <div className="rounded-[1.5rem] border border-white/15 bg-white/10 px-4 py-3 text-sm text-white shadow-sm backdrop-blur-sm">
-    <p className="text-xs uppercase tracking-[0.3em] text-white/70">{label}</p>
-    <p className="mt-2 text-lg font-semibold text-white">{value}</p>
-  </div>
-);
-
-const StatCard = ({ title, value, description, icon: Icon, tone }) => {
-  const toneStyles = {
-    blue: 'text-sky-600 bg-sky-50/80 ring-sky-100',
-    orange: 'text-orange-600 bg-orange-50/80 ring-orange-100',
-    emerald: 'text-emerald-600 bg-emerald-50/80 ring-emerald-100',
-    teal: 'text-teal-600 bg-teal-50/80 ring-teal-100',
+/* ─── Activity item ─────────────────────────────────────────────────────── */
+function ActivityItem({ notification }) {
+  const timeAgo = (iso) => {
+    if (!iso) return '';
+    const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+    if (diff < 60)    return `${diff}s ago`;
+    if (diff < 3600)  return `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    return `${Math.floor(diff / 86400)}d ago`;
   };
 
-  return (
-    <article className="group rounded-[1.5rem] border border-slate-200 bg-white p-6 shadow-sm transition duration-200 hover:-translate-y-1 hover:border-slate-300 hover:shadow-xl">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-slate-400">{title}</p>
-          <p className="mt-4 text-4xl font-semibold tracking-tight text-slate-900">{value}</p>
-        </div>
-        <div className={`flex h-14 w-14 items-center justify-center rounded-3xl border ${toneStyles[tone]}`}>
-          <Icon size={24} />
-        </div>
-      </div>
-      <p className="mt-5 text-sm leading-6 text-slate-500">{description}</p>
-    </article>
-  );
-};
-
-const InsightCard = ({ label, value, percentage, status }) => {
-  const tone = {
-    success: 'bg-emerald-500',
-    warning: 'bg-orange-500',
-    critical: 'bg-rose-500',
-  }[status];
-
-  const labelColor = {
-    success: 'text-emerald-700 bg-emerald-100',
-    warning: 'text-orange-700 bg-orange-100',
-    critical: 'text-rose-700 bg-rose-100',
-  }[status];
+  const isUnread = !notification.is_read;
 
   return (
-    <div className="rounded-[1.5rem] border border-slate-200 bg-white p-5 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-lg">
-      <div className="flex items-center justify-between gap-4">
-        <p className="text-sm font-semibold text-slate-800">{label}</p>
-        <span className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${labelColor}`}>{status.toUpperCase()}</span>
+    <div className={`flex items-start gap-3 rounded-lg px-3 py-2.5 transition-colors ${isUnread ? 'bg-brand-50/40' : 'hover:bg-slate-50'}`}>
+      <div className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${isUnread ? 'bg-brand-500' : 'bg-slate-300'}`} />
+      <div className="flex-1 min-w-0">
+        <p className={`text-xs font-medium truncate ${isUnread ? 'text-slate-900' : 'text-slate-600'}`}>
+          {notification.title}
+        </p>
+        {notification.message && (
+          <p className="text-2xs text-slate-400 truncate mt-0.5">{notification.message}</p>
+        )}
       </div>
-      <p className="mt-4 text-3xl font-semibold text-slate-900">{value}</p>
-      <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-100">
-        <div className={`${tone} h-full rounded-full`} style={{ width: `${percentage}%` }} />
-      </div>
-      <p className="mt-3 text-sm text-slate-500">{percentage}% performance score</p>
+      <span className="text-2xs text-slate-400 shrink-0">{timeAgo(notification.created_at)}</span>
     </div>
   );
-};
+}
 
-const ActivityItem = ({ title, time }) => (
-  <li className="group flex items-center justify-between gap-4 rounded-[1.5rem] border border-slate-200 bg-white p-4 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:bg-slate-50">
-    <div className="flex items-center gap-3">
-      <span className="inline-flex h-3.5 w-3.5 rounded-full bg-sky-500" />
-      <p className="text-sm font-medium text-slate-900">{title}</p>
+/* ─── Compliance metric bar ─────────────────────────────────────────────── */
+function ComplianceBar({ label, value, color }) {
+  const pct = Math.min(100, Math.max(0, value || 0));
+  const barColor =
+    pct >= 80 ? 'bg-emerald-500'
+    : pct >= 60 ? 'bg-amber-500'
+    : 'bg-red-500';
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1.5">
+        <span className="text-xs text-slate-600">{label}</span>
+        <span className={`text-xs font-bold ${color || 'text-slate-700'}`}>{pct}%</span>
+      </div>
+      <div className="progress-track">
+        <div
+          className={`progress-bar ${barColor}`}
+          style={{ width: `${pct}%`, transition: 'width 0.8s ease-out' }}
+        />
+      </div>
     </div>
-    <p className="text-xs text-slate-500">{time}</p>
-  </li>
-);
+  );
+}
 
+/* ─── Main Dashboard ────────────────────────────────────────────────────── */
 const Dashboard = () => {
   const { user, userProfile } = useContext(UserContext);
+  const { notifications, unreadCount } = useNotifications();
   const navigate = useNavigate();
-  const displayDepartment = userProfile?.department || user?.department || (user?.role === 'ADMIN' ? 'Global' : 'N/A');
 
-  const headerActions = [
-    {
-      title: 'Submit Document',
-      description: 'Upload compliance evidence for review',
-      icon: FileText,
-      link: '/documents',
-      roles: ['EMPLOYEE'],
-    },
-    {
-      title: 'Review Validations',
-      description: 'Approve or reject submitted documents',
-      icon: ClipboardCheck,
-      link: '/validations',
-      roles: ['ADMIN', 'TEAMLEAD'],
-    },
-    {
-      title: 'Manage Normes',
-      description: 'Define department compliance rules',
-      icon: ClipboardList,
-      link: '/normes',
-      roles: ['ADMIN', 'TEAMLEAD'],
-    },
-    {
-      title: 'Manage Users',
-      description: 'Create, edit and review user accounts',
-      icon: ShieldCheck,
-      link: '/users',
-      roles: ['ADMIN'],
-    },
-    {
-      title: 'Department Overview',
-      description: 'Review department structure and status',
-      icon: Building,
-      link: '/departments',
-      roles: ['ADMIN'],
-    },
-  ];
+  const [stats, setStats]       = useState(null);
+  const [loadingStats, setLoadingStats] = useState(true);
+  const [docCounts, setDocCounts] = useState(null);
+
+  const displayDepartment =
+    userProfile?.department || user?.department ||
+    (user?.role === 'ADMIN' ? 'Global' : '—');
+
+  /* Fetch real data */
+  useEffect(() => {
+    let mounted = true;
+
+    const load = async () => {
+      try {
+        const [usersRes, deptRes, docsRes] = await Promise.allSettled([
+          user?.role === 'ADMIN' ? api.get('/rbac/users/') : Promise.resolve(null),
+          user?.role === 'ADMIN' ? api.get('/rbac/departments/') : Promise.resolve(null),
+          api.get('/documents/', { params: { page_size: 1 } }),
+        ]);
+
+        if (!mounted) return;
+
+        const usersData = usersRes.status === 'fulfilled' && usersRes.value?.data;
+        const deptData  = deptRes.status  === 'fulfilled' && deptRes.value?.data;
+        const docsData  = docsRes.status  === 'fulfilled' && docsRes.value?.data;
+
+        const userCount = Array.isArray(usersData?.data)
+          ? usersData.data.length
+          : (Array.isArray(usersData) ? usersData.length : null);
+
+        const deptCount = Array.isArray(deptData?.data)
+          ? deptData.data.length
+          : (Array.isArray(deptData) ? deptData.length : null);
+
+        const docCount = docsData?.count ?? (Array.isArray(docsData) ? docsData.length : null);
+
+        setStats({ userCount, deptCount, docCount });
+      } catch {}
+      finally { if (mounted) setLoadingStats(false); }
+    };
+
+    load();
+
+    /* Fetch doc counts by status */
+    const loadDocCounts = async () => {
+      try {
+        const statuses = ['approved','rejected','pending','reviewing'];
+        const results  = await Promise.allSettled(
+          statuses.map(s => api.get('/documents/', { params: { page_size: 1, status: s } }))
+        );
+        if (!mounted) return;
+        const map = {};
+        statuses.forEach((s, i) => {
+          if (results[i].status === 'fulfilled') {
+            map[s] = results[i].value?.data?.count ?? 0;
+          }
+        });
+        setDocCounts(map);
+      } catch {}
+    };
+
+    loadDocCounts();
+
+    return () => { mounted = false; };
+  }, [user?.role]);
+
+  /* Actions per role */
+  const ACTIONS = {
+    EMPLOYEE: [
+      { title: 'Submit a Document',     description: 'Upload compliance evidence for review',    icon: FileText,      link: '/documents'    },
+      { title: 'My Validations',        description: 'Check the status of your submissions',     icon: ClipboardCheck,link: '/validations'   },
+    ],
+    TEAMLEAD: [
+      { title: 'Review Validations',    description: 'Approve or reject submitted documents',    icon: ClipboardCheck,link: '/validations'   },
+      { title: 'Manage Standards',      description: 'Define and update compliance rules',       icon: BookOpen,      link: '/normes'        },
+      { title: 'Document Analysis',     description: 'Analyze documents automatically',          icon: ShieldCheck,   link: '/document-analysis' },
+      { title: 'Compliance Dashboard',  description: 'Executive compliance overview',            icon: TrendingUp,    link: '/compliance-dashboard' },
+    ],
+    ADMIN: [
+      { title: 'Review Validations',    description: 'Approve or reject submitted documents',    icon: ClipboardCheck,link: '/validations'   },
+      { title: 'Manage Users',          description: 'Create, edit and manage accounts',         icon: Users,         link: '/users'         },
+      { title: 'ML Dashboard',          description: 'Train and compare ML models',              icon: Activity,      link: '/ml-dashboard'  },
+      { title: 'Compliance Dashboard',  description: 'Executive compliance overview',            icon: TrendingUp,    link: '/compliance-dashboard' },
+    ],
+  };
+
+  const actions = ACTIONS[user?.role] || ACTIONS.EMPLOYEE;
+
+  /* Compliance mini summary */
+  const totalDocs    = stats?.docCount || 0;
+  const approvedPct  = totalDocs > 0 && docCounts ? Math.round((docCounts.approved || 0) / totalDocs * 100) : 0;
+  const rejectedPct  = totalDocs > 0 && docCounts ? Math.round((docCounts.rejected || 0) / totalDocs * 100) : 0;
+  const pendingPct   = totalDocs > 0 && docCounts ? Math.round(((docCounts.pending || 0) + (docCounts.reviewing || 0)) / totalDocs * 100) : 0;
 
   return (
     <Layout>
-      <div className="space-y-8 px-4 pb-8 pt-6 sm:px-6 lg:px-8">
-        <header className="relative overflow-hidden rounded-[2rem] bg-gradient-to-r from-slate-950 via-blue-950 to-sky-800 px-6 py-8 text-white shadow-2xl shadow-slate-950/30 sm:px-10 sm:py-10">
-          <div className="pointer-events-none absolute -right-16 top-10 h-72 w-72 rounded-full bg-sky-500/10 blur-3xl" />
-          <div className="pointer-events-none absolute left-4 top-16 h-72 w-72 rounded-full bg-violet-500/10 blur-3xl" />
-          <div className="relative grid gap-8 lg:grid-cols-[1.5fr_0.95fr] lg:items-center">
-            <div className="max-w-2xl">
-              <p className="text-xs uppercase tracking-[0.35em] text-slate-300/70">Enterprise overview</p>
-              <h1 className="mt-4 text-4xl font-semibold tracking-tight text-white sm:text-5xl">Powerful analytics for your organisation</h1>
-              <p className="mt-4 max-w-xl text-sm leading-7 text-slate-200 sm:text-base">
-                Monitor usage, performance, and recent activity in one polished workspace. The dashboard is designed to help teams move faster with confidence.
+      <div className="page-container">
+
+        {/* ── Hero header ── */}
+        <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-slate-900 via-brand-950 to-slate-900 px-6 py-7 text-white shadow-lg sm:px-8">
+          {/* Decorative orbs */}
+          <div className="pointer-events-none absolute -right-16 -top-12 h-64 w-64 rounded-full bg-brand-600/10 blur-3xl" />
+          <div className="pointer-events-none absolute -bottom-8 left-8 h-48 w-48 rounded-full bg-violet-500/10 blur-3xl" />
+
+          <div className="relative flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <p className="section-label text-slate-400">Enterprise Overview</p>
+              <h1 className="mt-2 text-2xl font-bold tracking-tight sm:text-3xl">
+                Welcome back, <span className="text-brand-300">{user?.username}</span>
+              </h1>
+              <p className="mt-1.5 text-sm text-slate-400">
+                {new Date().toLocaleDateString('en-GB', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
               </p>
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
-              <HeaderBadge label="Role" value={user?.role || 'N/A'} />
-              <HeaderBadge label="Department" value={displayDepartment} />
+            <div className="flex flex-wrap gap-3">
+              {/* Role pill */}
+              <div className="rounded-lg border border-white/10 bg-white/[0.07] px-4 py-3 backdrop-blur-sm">
+                <p className="text-2xs font-bold uppercase tracking-wider text-slate-400">Role</p>
+                <p className="mt-1 text-sm font-bold text-white">{user?.role}</p>
+              </div>
+              {/* Department pill */}
+              <div className="rounded-lg border border-white/10 bg-white/[0.07] px-4 py-3 backdrop-blur-sm">
+                <p className="text-2xs font-bold uppercase tracking-wider text-slate-400">Department</p>
+                <p className="mt-1 text-sm font-bold text-white">{displayDepartment}</p>
+              </div>
+              {/* Notifications pill */}
+              {unreadCount > 0 && (
+                <div className="rounded-lg border border-red-400/30 bg-red-500/10 px-4 py-3 backdrop-blur-sm flex items-center gap-2">
+                  <Bell size={15} className="text-red-300" />
+                  <div>
+                    <p className="text-2xs font-bold uppercase tracking-wider text-red-400">Alerts</p>
+                    <p className="mt-1 text-sm font-bold text-white">{unreadCount} unread</p>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
+        </div>
 
-          <div className="mt-8 grid gap-4 sm:grid-cols-3">
-            <div className="rounded-[1.75rem] border border-white/10 bg-white/10 p-6 shadow-lg shadow-slate-950/10 backdrop-blur-xl transition duration-200 hover:bg-white/15">
-              <div className="flex items-center gap-3">
-                <Sparkles size={22} className="text-white" />
-                <div>
-                  <p className="text-sm text-slate-200">Engagement</p>
-                  <p className="mt-1 text-xl font-semibold text-white">+14.2%</p>
+        {/* ── KPI Grid ── */}
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {loadingStats ? (
+            [1,2,3,4].map(i => <SkeletonCard key={i} />)
+          ) : (
+            <>
+              <KpiCard
+                icon={Users}
+                label="Total Users"
+                value={stats?.userCount ?? '—'}
+                sub={user?.role === 'ADMIN' ? 'Registered accounts' : undefined}
+                color="text-brand-600"
+                bg="bg-brand-50"
+                loading={false}
+              />
+              <KpiCard
+                icon={Building2}
+                label="Departments"
+                value={stats?.deptCount ?? '4'}
+                sub="Active divisions"
+                color="text-violet-600"
+                bg="bg-violet-50"
+                loading={false}
+              />
+              <KpiCard
+                icon={FileText}
+                label="Documents"
+                value={stats?.docCount ?? '—'}
+                sub={docCounts ? `${docCounts.approved ?? 0} approved` : 'Total submissions'}
+                color="text-emerald-600"
+                bg="bg-emerald-50"
+                loading={false}
+              />
+              <KpiCard
+                icon={Activity}
+                label="System Status"
+                value="Online"
+                sub="All services operational"
+                color="text-teal-600"
+                bg="bg-teal-50"
+                loading={false}
+              />
+            </>
+          )}
+        </div>
+
+        {/* ── Main content grid ── */}
+        <div className="grid gap-5 lg:grid-cols-[1fr_360px]">
+
+          {/* Left — Quick actions + Compliance summary */}
+          <div className="space-y-5">
+
+            {/* Quick actions */}
+            <div className="card">
+              <div className="card-header">
+                <h2 className="card-title">Quick Actions</h2>
+                <span className="badge badge-slate">{actions.length} actions</span>
+              </div>
+              <div className="p-4 grid gap-2 sm:grid-cols-2">
+                {actions.map(action => (
+                  <ActionCard
+                    key={action.title}
+                    {...action}
+                    onClick={() => navigate(action.link)}
+                  />
+                ))}
+              </div>
+            </div>
+
+            {/* Document compliance summary */}
+            {(docCounts || loadingStats) && (
+              <div className="card">
+                <div className="card-header">
+                  <h2 className="card-title">Document Compliance</h2>
+                  {totalDocs > 0 && (
+                    <span className="text-xs text-slate-500 font-medium">{totalDocs} total</span>
+                  )}
+                </div>
+                <div className="card-body space-y-4">
+                  {loadingStats ? (
+                    <div className="space-y-3">
+                      {[1,2,3].map(i => <div key={i} className="skeleton h-8 rounded-lg" />)}
+                    </div>
+                  ) : totalDocs === 0 ? (
+                    <p className="text-sm text-slate-400 py-4 text-center">No documents submitted yet.</p>
+                  ) : (
+                    <>
+                      <ComplianceBar label="Approved" value={approvedPct} color="text-emerald-600" />
+                      <ComplianceBar label="Pending / Reviewing" value={pendingPct} color="text-amber-600" />
+                      <ComplianceBar label="Rejected" value={rejectedPct} color="text-red-600" />
+
+                      <div className="mt-3 grid grid-cols-4 gap-2 text-center">
+                        {[
+                          { label: 'Approved',   val: docCounts?.approved  ?? 0, cls: 'text-emerald-600' },
+                          { label: 'Reviewing',  val: docCounts?.reviewing ?? 0, cls: 'text-sky-600'     },
+                          { label: 'Pending',    val: docCounts?.pending   ?? 0, cls: 'text-amber-600'   },
+                          { label: 'Rejected',   val: docCounts?.rejected  ?? 0, cls: 'text-red-600'     },
+                        ].map(s => (
+                          <div key={s.label} className="rounded-lg bg-slate-50 py-2.5">
+                            <p className={`text-xl font-bold tabular-nums ${s.cls}`}>{s.val}</p>
+                            <p className="text-2xs text-slate-500 mt-0.5">{s.label}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
-              <p className="mt-4 text-sm leading-6 text-slate-300">More active users in the last 7 days across your organization.</p>
-            </div>
-            <div className="rounded-[1.75rem] border border-white/10 bg-white/10 p-6 shadow-lg shadow-slate-950/10 backdrop-blur-xl transition duration-200 hover:bg-white/15">
-              <div className="flex items-center gap-3">
-                <BarChart3 size={22} className="text-white" />
-                <div>
-                  <p className="text-sm text-slate-200">Optimization</p>
-                  <p className="mt-1 text-xl font-semibold text-white">Stable</p>
-                </div>
-              </div>
-              <p className="mt-4 text-sm leading-6 text-slate-300">Monitoring is active and no critical issues were detected in the last hour.</p>
-            </div>
-            <div className="rounded-[1.75rem] border border-white/10 bg-white/10 p-6 shadow-lg shadow-slate-950/10 backdrop-blur-xl transition duration-200 hover:bg-white/15">
-              <div className="flex items-center gap-3">
-                <Bell size={22} className="text-white" />
-                <div>
-                  <p className="text-sm text-slate-200">Notifications</p>
-                  <p className="mt-1 text-xl font-semibold text-white">3 unread</p>
-                </div>
-              </div>
-              <p className="mt-4 text-sm leading-6 text-slate-300">Review the latest activity and system updates in one place.</p>
-            </div>
+            )}
           </div>
-        </header>
 
-        <section className="grid gap-6 xl:grid-cols-[1.35fr_0.85fr]">
-          <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-2">
-            {statCards.map((stat) => (
-              <StatCard key={stat.title} {...stat} />
-            ))}
-          </div>
+          {/* Right — Recent notifications */}
+          <div className="space-y-5">
+            <div className="card flex flex-col" style={{ maxHeight: '480px' }}>
+              <div className="card-header shrink-0">
+                <h2 className="card-title">Recent Activity</h2>
+                {unreadCount > 0 && (
+                  <span className="badge badge-red">{unreadCount} new</span>
+                )}
+              </div>
 
-          <aside className="space-y-6">
-            <div className="rounded-[1.75rem] border border-slate-200 bg-white p-6 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-xl">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <p className="text-sm font-semibold text-slate-900">Platform insights</p>
-                  <p className="mt-2 text-sm text-slate-500">Live performance indicators.</p>
+              <div className="flex-1 overflow-y-auto">
+                {notifications.length === 0 ? (
+                  <div className="flex flex-col items-center gap-2 py-10">
+                    <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-slate-100 text-slate-300">
+                      <Bell size={20} />
+                    </div>
+                    <p className="text-sm text-slate-500">No recent activity</p>
+                  </div>
+                ) : (
+                  <div className="p-2 space-y-0.5">
+                    {notifications.slice(0, 12).map(n => (
+                      <ActivityItem key={n.id} notification={n} />
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {notifications.length > 0 && (
+                <div className="shrink-0 border-t border-slate-100 p-3">
+                  <button
+                    type="button"
+                    onClick={() => navigate('/dashboard')}
+                    className="w-full text-xs font-medium text-brand-600 hover:text-brand-700 text-center py-1 transition-colors"
+                  >
+                    View all notifications →
+                  </button>
                 </div>
-                <span className="inline-flex items-center gap-2 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.22em] text-emerald-700 shadow-sm">
-                  <span className="inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse" />
-                  LIVE
+              )}
+            </div>
+
+            {/* Status summary */}
+            <div className="card">
+              <div className="card-header">
+                <h2 className="card-title">System Health</h2>
+                <span className="badge badge-green">
+                  <span className="status-dot-green animate-pulse" />
+                  Operational
                 </span>
               </div>
-
-              <div className="mt-6 space-y-4">
-                {insights.map((item) => (
-                  <InsightCard key={item.label} {...item} />
+              <div className="card-body space-y-3">
+                {[
+                  { label: 'Backend API',   status: 'online' },
+                  { label: 'Database',      status: 'online' },
+                  { label: 'Auth Service',  status: 'online' },
+                  { label: 'ML Pipeline',   status: 'online' },
+                ].map(svc => (
+                  <div key={svc.label} className="flex items-center justify-between">
+                    <span className="text-sm text-slate-600">{svc.label}</span>
+                    <span className="flex items-center gap-1.5 text-xs font-medium text-emerald-600">
+                      <CheckCircle2 size={12} />
+                      Healthy
+                    </span>
+                  </div>
                 ))}
               </div>
             </div>
-
-            <div className="rounded-[1.75rem] border border-slate-200 bg-white p-6 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-xl">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <p className="text-sm font-semibold text-slate-900">Recent activity</p>
-                  <p className="mt-2 text-sm text-slate-500">Timeline of the latest events.</p>
-                </div>
-              </div>
-
-              <ul className="mt-6 space-y-3">
-                {activityFeed.map((event) => (
-                  <ActivityItem key={event.id} {...event} />
-                ))}
-              </ul>
-            </div>
-          </aside>
-        </section>
-
-        {headerActions.filter((action) => action.roles.includes(user?.role)).length > 0 && (
-          <section className="grid gap-6 xl:grid-cols-2">
-            {headerActions
-              .filter((action) => action.roles.includes(user?.role))
-              .map((action) => (
-                <button
-                  key={action.title}
-                  type="button"
-                  onClick={() => navigate(action.link)}
-                  className="group rounded-[1.5rem] border border-slate-200 bg-white p-6 text-left shadow-sm transition duration-200 hover:-translate-y-1 hover:shadow-xl"
-                >
-                  <div className="flex items-center justify-between gap-4">
-                    <div>
-                      <p className="text-sm font-semibold text-slate-900">{action.title}</p>
-                      <p className="mt-2 text-sm text-slate-500">{action.description}</p>
-                    </div>
-                    <div className="flex h-12 w-12 items-center justify-center rounded-3xl bg-slate-100 text-slate-700">
-                      <action.icon size={24} />
-                    </div>
-                  </div>
-                  <div className="mt-6 inline-flex items-center gap-2 text-sm font-semibold text-sky-600">
-                    Open <ArrowRight size={16} className="transition-transform duration-200 group-hover:translate-x-1" />
-                  </div>
-                </button>
-              ))}
-          </section>
-        )}
+          </div>
+        </div>
       </div>
     </Layout>
   );

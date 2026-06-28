@@ -710,7 +710,7 @@ function DatasetQualityTab() {
   }, [norm]);
 
   const ev = data?.evidence ?? {};
-  const cl = data?.classification ?? {};
+  const cl = data?.classification ?? {}; // eslint-disable-line no-unused-vars
   const cov = data?.coverage ?? {};
   const quality = data?.quality ?? {};
 
@@ -1363,7 +1363,7 @@ function AssistantTab({ llmAvailable, standards }) {
     try { return JSON.parse(localStorage.getItem('ai_chat_history') || '[]'); } catch { return []; }
   });
   const [showHistory, setShowHistory] = useState(false);
-  const [streaming, setStreaming] = useState(false);
+  const [streaming, setStreaming] = useState(false); // eslint-disable-line no-unused-vars
   const [streamStatus, setStreamStatus] = useState('');
   const messagesEndRef = useRef(null);
 
@@ -1664,67 +1664,66 @@ export default function AIInsights() {
 
   return (
     <Layout>
-      <div className="space-y-5 pb-10">
+      <div className="page-container">
 
-        {/* ── Hero Header ─────────────────────────────────────────── */}
-        <div className="overflow-hidden rounded-2xl bg-gradient-to-br from-slate-900 via-violet-950 to-slate-900 px-6 py-6 shadow-xl">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <div className="flex items-center gap-2 mb-1">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-500/20">
-                  <Brain size={20} className="text-violet-300" />
-                </div>
-                <p className="text-xs font-semibold uppercase tracking-widest text-violet-400">AI Intelligence Center</p>
+        {/* ── Page Header ─────────────────────────────────────────── */}
+        <div className="page-header">
+          <div>
+            <p className="section-label">AI / Machine Learning</p>
+            <h1 className="page-title mt-1">AI Insights</h1>
+            <p className="page-subtitle">
+              Model health · Drift detection · Explainable AI · Dataset quality · Assistant
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {!overviewLoading && (
+              <div className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold ${
+                healthScore >= 90 ? 'border-emerald-200 bg-emerald-50 text-emerald-700' :
+                healthScore >= 75 ? 'border-amber-200 bg-amber-50 text-amber-700' :
+                'border-red-200 bg-red-50 text-red-700'
+              }`}>
+                <span className={`h-2 w-2 rounded-full ${
+                  healthScore >= 90 ? 'bg-emerald-500' :
+                  healthScore >= 75 ? 'bg-amber-500' : 'bg-red-500'
+                }`} />
+                {overviewData?.health?.label ?? 'Unknown'} · {healthScore}/100
               </div>
-              <h1 className="text-2xl font-bold text-white">AI Insights</h1>
-              <p className="text-sm text-slate-400 mt-0.5">
-                Comparable à Microsoft Copilot · Azure AI Studio · IBM Watson
-              </p>
-              {lastRefresh && (
-                <p className="text-[10px] text-slate-500 mt-1">
-                  Actualisé: {lastRefresh.toLocaleTimeString('fr-FR')}
-                </p>
-              )}
-            </div>
-            <div className="flex flex-wrap items-center gap-3">
-              {/* Health badge */}
-              {!overviewLoading && (
-                <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-2">
-                  <div className={`h-2.5 w-2.5 rounded-full ${healthScore >= 90 ? 'bg-emerald-400' : healthScore >= 75 ? 'bg-amber-400' : healthScore >= 50 ? 'bg-orange-400' : 'bg-rose-400'}`} />
-                  <span className="text-xs font-semibold text-white">
-                    {overviewData?.health?.label ?? '—'} ({healthScore}/100)
-                  </span>
-                </div>
-              )}
-              <button onClick={handleRefresh} disabled={overviewLoading}
-                className="inline-flex items-center gap-1.5 rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold text-slate-300 hover:bg-white/10 disabled:opacity-50 transition">
-                <RefreshCw size={13} className={overviewLoading ? 'animate-spin' : ''} /> Actualiser
-              </button>
-              <a href="#/evidence-intelligence"
-                className="inline-flex items-center gap-1.5 rounded-2xl bg-violet-500/20 border border-violet-400/30 px-4 py-2 text-xs font-semibold text-violet-300 hover:bg-violet-500/30 transition">
-                <Database size={13} /> Evidence Intelligence
-              </a>
-            </div>
+            )}
+            {lastRefresh && (
+              <span className="text-2xs text-slate-400">
+                Updated {lastRefresh.toLocaleTimeString('fr-FR')}
+              </span>
+            )}
+            <button
+              onClick={handleRefresh}
+              disabled={overviewLoading}
+              className="btn-secondary btn-sm"
+            >
+              <RefreshCw size={13} className={overviewLoading ? 'animate-spin' : ''} />
+              Refresh
+            </button>
           </div>
         </div>
 
         {/* ── Tab navigation ──────────────────────────────────────── */}
-        <div className="flex flex-wrap gap-1.5">
-          {TABS.map(t => (
-            <button
-              key={t.id}
-              onClick={() => setActiveTab(t.id)}
-              className={`flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold transition-all ${
-                activeTab === t.id
-                  ? 'bg-slate-900 text-white shadow-sm'
-                  : 'border border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:text-slate-800'
-              }`}
-            >
-              <t.icon size={13} />
-              <span className="hidden sm:inline">{t.label}</span>
-              <span className="sm:hidden">{t.label.split(' ')[0]}</span>
-            </button>
-          ))}
+        <div className="card p-1.5">
+          <div className="flex flex-wrap gap-1">
+            {TABS.map(t => (
+              <button
+                key={t.id}
+                onClick={() => setActiveTab(t.id)}
+                className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-all ${
+                  activeTab === t.id
+                    ? 'bg-slate-900 text-white shadow-sm'
+                    : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'
+                }`}
+              >
+                <t.icon size={12} />
+                <span className="hidden sm:inline">{t.label}</span>
+                <span className="sm:hidden">{t.label.split(' ')[0]}</span>
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* ── Tab Content ─────────────────────────────────────────── */}

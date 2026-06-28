@@ -1,10 +1,135 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
-  content: [
-    "./src/**/*.{js,jsx,ts,tsx}",
-  ],
+  content: ['./src/**/*.{js,jsx,ts,tsx}'],
   theme: {
-    extend: {},
+    extend: {
+      colors: {
+        // Brand primary — "Enterprise Blue"
+        brand: {
+          50:  '#eff6ff',
+          100: '#dbeafe',
+          200: '#bfdbfe',
+          300: '#93c5fd',
+          400: '#60a5fa',
+          500: '#3b82f6',
+          600: '#2563eb',
+          700: '#1d4ed8',
+          800: '#1e40af',
+          900: '#1e3a8a',
+          950: '#172554',
+        },
+        // Surface neutrals — slate-based for enterprise feel
+        surface: {
+          base:    '#f8fafc', // page bg
+          card:    '#ffffff',
+          raised:  '#f1f5f9',
+          overlay: '#e2e8f0',
+          border:  '#e2e8f0',
+          muted:   '#f8fafc',
+        },
+        // Sidebar
+        sidebar: {
+          bg:      '#0f172a',
+          hover:   '#1e293b',
+          active:  '#1e3a8a',
+          border:  'rgba(255,255,255,0.06)',
+          text:    '#94a3b8',
+          heading: '#475569',
+        },
+        // Status
+        status: {
+          success:      '#10b981',
+          successLight: '#d1fae5',
+          successDark:  '#065f46',
+          warning:      '#f59e0b',
+          warningLight: '#fef3c7',
+          warningDark:  '#92400e',
+          danger:       '#ef4444',
+          dangerLight:  '#fee2e2',
+          dangerDark:   '#991b1b',
+          info:         '#3b82f6',
+          infoLight:    '#dbeafe',
+          infoDark:     '#1e40af',
+        },
+      },
+      fontFamily: {
+        sans: [
+          'Inter',
+          '-apple-system',
+          'BlinkMacSystemFont',
+          '"Segoe UI"',
+          'Roboto',
+          'sans-serif',
+        ],
+        mono: ['"JetBrains Mono"', '"Fira Code"', 'Consolas', 'monospace'],
+      },
+      fontSize: {
+        '2xs': ['0.625rem', { lineHeight: '0.875rem' }],
+        xs:    ['0.75rem',  { lineHeight: '1rem'     }],
+        sm:    ['0.8125rem',{ lineHeight: '1.25rem'  }],
+        base:  ['0.875rem', { lineHeight: '1.5rem'   }],
+        md:    ['0.9375rem',{ lineHeight: '1.5rem'   }],
+        lg:    ['1rem',     { lineHeight: '1.625rem' }],
+        xl:    ['1.125rem', { lineHeight: '1.75rem'  }],
+        '2xl': ['1.25rem',  { lineHeight: '1.875rem' }],
+        '3xl': ['1.5rem',   { lineHeight: '2rem'     }],
+        '4xl': ['1.875rem', { lineHeight: '2.25rem'  }],
+        '5xl': ['2.25rem',  { lineHeight: '2.5rem'   }],
+      },
+      spacing: {
+        4.5:  '1.125rem',
+        5.5:  '1.375rem',
+        13:   '3.25rem',
+        15:   '3.75rem',
+        18:   '4.5rem',
+        22:   '5.5rem',
+        sidebar: '16rem', // 256px
+      },
+      borderRadius: {
+        DEFAULT: '0.5rem',
+        sm:  '0.25rem',
+        md:  '0.375rem',
+        lg:  '0.5rem',
+        xl:  '0.75rem',
+        '2xl': '1rem',
+        '3xl': '1.5rem',
+        card: '0.75rem',
+      },
+      boxShadow: {
+        card:   '0 1px 3px 0 rgb(0 0 0 / 0.07), 0 1px 2px -1px rgb(0 0 0 / 0.05)',
+        'card-hover': '0 4px 12px 0 rgb(0 0 0 / 0.1), 0 2px 6px -1px rgb(0 0 0 / 0.06)',
+        modal:  '0 20px 60px -10px rgb(0 0 0 / 0.25)',
+        dropdown: '0 8px 24px -4px rgb(0 0 0 / 0.12)',
+        'inset-sm': 'inset 0 1px 2px rgb(0 0 0 / 0.06)',
+        glow:   '0 0 20px rgb(59 130 246 / 0.25)',
+      },
+      transitionDuration: {
+        150: '150ms',
+        200: '200ms',
+        250: '250ms',
+      },
+      animation: {
+        'fade-in':       'fadeIn 0.2s ease-out',
+        'slide-up':      'slideUp 0.25s ease-out',
+        'slide-in-left': 'slideInLeft 0.25s ease-out',
+        'scale-in':      'scaleIn 0.15s ease-out',
+        'shimmer':       'shimmer 1.6s linear infinite',
+        'pulse-slow':    'pulse 3s cubic-bezier(0.4,0,0.6,1) infinite',
+        'spin-slow':     'spin 3s linear infinite',
+      },
+      keyframes: {
+        fadeIn:      { from: { opacity: 0 },                     to: { opacity: 1 } },
+        slideUp:     { from: { opacity: 0, transform: 'translateY(8px)' }, to: { opacity: 1, transform: 'translateY(0)' } },
+        slideInLeft: { from: { opacity: 0, transform: 'translateX(-8px)' }, to: { opacity: 1, transform: 'translateX(0)' } },
+        scaleIn:     { from: { opacity: 0, transform: 'scale(0.95)' }, to: { opacity: 1, transform: 'scale(1)' } },
+        shimmer:     { from: { backgroundPosition: '200% 0' }, to: { backgroundPosition: '-200% 0' } },
+      },
+      backgroundImage: {
+        'shimmer-gradient': 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.6) 50%, transparent 100%)',
+        'brand-gradient':   'linear-gradient(135deg, #1d4ed8 0%, #2563eb 50%, #3b82f6 100%)',
+        'sidebar-gradient': 'linear-gradient(180deg, #0f172a 0%, #1e293b 100%)',
+      },
+    },
   },
   plugins: [],
-}
+};

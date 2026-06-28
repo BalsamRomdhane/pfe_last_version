@@ -3,236 +3,216 @@ import { Link } from 'react-router-dom';
 import { UserContext } from '../context/UserContext';
 import Layout from './Layout';
 import UploadBox from './UploadBox';
+import StatusBadge from './StatusBadge';
+import EmptyState from './common/EmptyState';
 import api from '../services/api';
-import { FileText } from 'lucide-react';
+import {
+  FileText, Search, ChevronLeft, ChevronRight,
+  ExternalLink, ClipboardCheck, SlidersHorizontal, X,
+} from 'lucide-react';
 
-const statusLabels = {
-  pending: 'Pending',
-  reviewing: 'Under Review',
-  approved: 'Approved',
-  rejected: 'Rejected',
-};
+/* ─── helpers ──────────────────────────────────────────────────────────── */
+const fmt = (d) => d ? new Date(d).toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' }) : '—';
+const statusLabels = { pending: 'Pending', reviewing: 'Reviewing', approved: 'Approved', rejected: 'Rejected' };
 
+/* ─── Skeleton row ─────────────────────────────────────────────────────── */
+function SkeletonRow() {
+  return (
+    <tr>
+      {[1,2,3,4,5,6,7].map(i => (
+        <td key={i} className="px-4 py-3">
+          <div className="skeleton h-4 rounded" style={{ width: `${60 + Math.random()*30}%` }} />
+        </td>
+      ))}
+    </tr>
+  );
+}
+
+/* ─── Stat card ────────────────────────────────────────────────────────── */
+function StatCard({ label, value, color, loading }) {
+  return (
+    <div className="kpi-card">
+      <p className="kpi-label">{label}</p>
+      {loading
+        ? <div className="skeleton h-8 w-12 mt-2 rounded" />
+        : <p className={`text-3xl font-bold tabular-nums mt-2 ${color}`}>{value}</p>
+      }
+    </div>
+  );
+}
+
+/* ─── Documents page ───────────────────────────────────────────────────── */
 const Documents = () => {
   const { user } = useContext(UserContext);
-  const [documents, setDocuments] = useState([]);
-  const [normes, setNormes] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [uploading, setUploading] = useState(false);
-  const [selectedNorme, setSelectedNorme] = useState('');
-  const [search, setSearch] = useState('');
+  const [documents,    setDocuments]    = useState([]);
+  const [normes,       setNormes]       = useState([]);
+  const [loading,      setLoading]      = useState(true);
+  const [uploading,    setUploading]    = useState(false);
+  const [selectedNorme,setSelectedNorme]= useState('');
+  const [search,       setSearch]       = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
-  const [page, setPage] = useState(1);
-  const [pageSize] = useState(20);
-  const [total, setTotal] = useState(0);
-  const [file, setFile] = useState(null);
-  const [counts, setCounts] = useState({ total: 0, approved: 0, rejected: 0, pending: 0, reviewing: 0 });
+  const [page,         setPage]         = useState(1);
+  const [pageSize]                      = useState(20);
+  const [total,        setTotal]        = useState(0);
+  const [file,         setFile]         = useState(null);
+  const [counts,       setCounts]       = useState({ total:0, approved:0, rejected:0, pending:0, reviewing:0 });
   const [statusFilter, setStatusFilter] = useState('');
-  const [sortBy, setSortBy] = useState('newest');
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
-  const [updatingStatusId, setUpdatingStatusId] = useState(null);
+  const [sortBy,       setSortBy]       = useState('newest');
+  const [message,      setMessage]      = useState('');
+  const [error,        setError]        = useState('');
+  const [updatingId,   setUpdatingId]   = useState(null);
+  const [showUpload,   setShowUpload]   = useState(false);
 
-  useEffect(() => {
-    fetchDocuments();
-    fetchNormes();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Debounce search input
+  /* Debounce search */
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search.trim()), 350);
     return () => clearTimeout(t);
   }, [search]);
 
-  // Fetch counts for stats cards
+  /* Reset page on filter change */
+  useEffect(() => { setPage(1); }, [debouncedSearch, selectedNorme, statusFilter, sortBy]);
+
+  /* Fetch counts */
   const fetchCounts = useCallback(async () => {
     try {
-      // Use paginated endpoint to rely on DRF count field
       const base = await api.get('/documents/', { params: { page_size: 1 } });
-      const totalCount = base.data?.count ?? (Array.isArray(base.data) ? base.data.length : 0);
-
-      const statuses = ['approved', 'rejected', 'pending', 'reviewing'];
-      const promises = statuses.map((s) => api.get('/documents/', { params: { page_size: 1, status: s } }).catch(() => null));
-      const results = await Promise.all(promises);
-      const map = { total: totalCount };
+      const total = base.data?.count ?? 0;
+      const statuses = ['approved','rejected','pending','reviewing'];
+      const results = await Promise.allSettled(
+        statuses.map(s => api.get('/documents/', { params: { page_size: 1, status: s } }))
+      );
+      const map = { total };
       statuses.forEach((s, i) => {
-        const res = results[i];
-        map[s] = res?.data?.count ?? 0;
+        map[s] = results[i].status === 'fulfilled' ? (results[i].value?.data?.count ?? 0) : 0;
       });
       setCounts(map);
-    } catch (err) {
-      console.error('Counts fetch error', err);
-    }
+    } catch {}
   }, []);
 
-  useEffect(() => { fetchCounts(); }, [fetchCounts]);
+  useEffect(() => { fetchCounts(); }, [fetchCounts, debouncedSearch, selectedNorme, statusFilter]);
 
+  /* Fetch documents */
   const fetchDocuments = useCallback(async (opts = {}) => {
     setLoading(true);
     try {
-      const params = {
-        page: opts.page || page,
-        page_size: opts.pageSize || pageSize,
-      };
-      if (debouncedSearch) params.search = debouncedSearch;
-      if (selectedNorme) params.norme = selectedNorme;
-      if (statusFilter) params.status = statusFilter;
-      if (sortBy === 'oldest') params.ordering = 'created_at';
-      if (sortBy === 'newest') params.ordering = '-created_at';
+      const params = { page: opts.page || page, page_size: opts.pageSize || pageSize };
+      if (debouncedSearch)  params.search   = debouncedSearch;
+      if (selectedNorme)    params.norme    = selectedNorme;
+      if (statusFilter)     params.status   = statusFilter;
+      if (sortBy === 'oldest')  params.ordering = 'created_at';
+      if (sortBy === 'newest')  params.ordering = '-created_at';
       if (sortBy === 'highest') params.ordering = '-compliance_score';
-      if (sortBy === 'lowest') params.ordering = 'compliance_score';
+      if (sortBy === 'lowest')  params.ordering = 'compliance_score';
 
-      const response = await api.get('/documents/', { params });
-
-      // DRF pagination: { count, next, previous, results }
-      if (response.data && Array.isArray(response.data.results)) {
-        setDocuments(response.data.results);
-        setTotal(response.data.count || response.data.results.length);
-      } else if (Array.isArray(response.data)) {
-        setDocuments(response.data);
-        setTotal(response.data.length);
+      const res = await api.get('/documents/', { params });
+      if (Array.isArray(res.data?.results)) {
+        setDocuments(res.data.results);
+        setTotal(res.data.count || 0);
+      } else if (Array.isArray(res.data)) {
+        setDocuments(res.data);
+        setTotal(res.data.length);
       } else {
-        setDocuments([]);
-        setTotal(0);
+        setDocuments([]); setTotal(0);
       }
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
+    } catch { setDocuments([]); setTotal(0); }
+    finally { setLoading(false); }
   }, [page, pageSize, debouncedSearch, selectedNorme, statusFilter, sortBy]);
 
-  const fetchNormes = async () => {
-    try {
-      const response = await api.get('/normes/');
-      const normesData = Array.isArray(response.data)
-        ? response.data
-        : Array.isArray(response.data?.results)
-        ? response.data.results
-        : [];
-      setNormes(normesData);
-    } catch (err) {
-      console.error(err);
-    }
-  };
+  useEffect(() => { fetchDocuments({ page, pageSize }); }, [fetchDocuments, page, pageSize]);
+
+  /* Fetch normes */
+  useEffect(() => {
+    api.get('/normes/').then(res => {
+      const data = Array.isArray(res.data) ? res.data : (res.data?.results || []);
+      setNormes(data);
+    }).catch(() => {});
+  }, []);
 
   const normeMap = useMemo(
-    () => Object.fromEntries(normes.map((norme) => [norme.id, norme.name])),
+    () => Object.fromEntries(normes.map(n => [n.id, n.name])),
     [normes]
   );
 
-  const handleUpload = async (event) => {
-    event.preventDefault();
-    setError('');
-    setMessage('');
+  /* Upload */
+  const handleUpload = async (e) => {
+    e.preventDefault();
+    setError(''); setMessage('');
+    if (!selectedNorme || !file) { setError('Please select a standard and a document file.'); return; }
     setUploading(true);
-
-    if (!selectedNorme || !file) {
-      setError('Please select a norme and a document file.');
-      setUploading(false);
-      return;
-    }
-
     const payload = new FormData();
     payload.append('norme', selectedNorme);
     payload.append('file', file);
-
     try {
-      await api.post('/documents/', payload, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
+      await api.post('/documents/', payload, { headers: { 'Content-Type': 'multipart/form-data' } });
       setMessage('Document uploaded successfully.');
-      setSelectedNorme('');
-      setFile(null);
-      fetchDocuments();
+      setSelectedNorme(''); setFile(null);
+      setShowUpload(false);
+      fetchDocuments(); fetchCounts();
     } catch (err) {
-      console.error(err);
       setError(err?.response?.data?.detail || err?.response?.data || 'Unable to upload document.');
-    } finally {
-      setUploading(false);
-    }
+    } finally { setUploading(false); }
   };
 
-  const updateStatus = async (documentId, status) => {
-    setError('');
-    setMessage('');
-    setUpdatingStatusId(documentId);
+  /* Update status */
+  const updateStatus = async (docId, status) => {
+    setError(''); setMessage(''); setUpdatingId(docId);
     try {
-      const response = await api.patch(`/documents/${documentId}/status/`, { status });
-      const updatedDocument = response.data?.document;
-      const savedStatus = updatedDocument?.status || response.data?.status || status;
-
-      setDocuments((currentDocuments) =>
-        currentDocuments.map((document) =>
-          document.id === documentId
-            ? {
-                ...document,
-                status: savedStatus,
-                teamlead_username:
-                  updatedDocument?.teamlead_username ?? document.teamlead_username,
-              }
-            : document
-        )
-      );
-      await fetchDocuments();
-      setMessage(`Status updated to ${statusLabels[savedStatus] || savedStatus}.`);
+      const res = await api.patch(`/documents/${docId}/status/`, { status });
+      const saved = res.data?.document?.status || res.data?.status || status;
+      setDocuments(prev => prev.map(d => d.id === docId ? { ...d, status: saved, teamlead_username: res.data?.document?.teamlead_username ?? d.teamlead_username } : d));
+      setMessage(`Status updated to "${statusLabels[saved] || saved}".`);
+      fetchCounts();
     } catch (err) {
-      console.error(err);
-      setError(err?.response?.data?.detail || err?.response?.data || 'Unable to update status.');
-    } finally {
-      setUpdatingStatusId(null);
-    }
+      setError(err?.response?.data?.detail || 'Unable to update status.');
+    } finally { setUpdatingId(null); }
   };
 
-  // Fetch when pagination/search/filter changes
-  useEffect(() => {
-    setPage(1); // reset to first page when search/filter change
-  }, [debouncedSearch, selectedNorme, pageSize, statusFilter, sortBy]);
-
-  useEffect(() => {
-    fetchCounts();
-  }, [debouncedSearch, selectedNorme, statusFilter, fetchCounts]);
-
-  useEffect(() => {
-    fetchDocuments({ page, pageSize });
-  }, [fetchDocuments, page, pageSize]);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   return (
     <Layout>
-      <div className="space-y-6">
-        <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+      <div className="page-container">
+
+        {/* ── Page header ── */}
+        <div className="page-header">
           <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.3em] text-sky-600">Compliance workflow</p>
-            <h1 className="mt-2 text-3xl font-bold text-slate-900">Documents</h1>
-            <p className="mt-3 max-w-2xl text-sm text-slate-600">
-              Submit evidence against a norme, then review submission status from the workflow board.
-            </p>
+            <p className="section-label">Compliance Workflow</p>
+            <h1 className="page-title mt-1">Documents</h1>
+            <p className="page-subtitle">Submit evidence against a standard and track review status.</p>
           </div>
-          <div className="rounded-3xl bg-white p-4 shadow-sm">
-            <div className="flex items-center gap-2 text-sm text-slate-500">
-              <FileText size={18} />
-              Document workflow access for employees and reviewers.
-            </div>
-          </div>
+          {user?.role === 'EMPLOYEE' && (
+            <button
+              type="button"
+              onClick={() => setShowUpload(v => !v)}
+              className={showUpload ? 'btn-secondary' : 'btn-primary'}
+            >
+              <FileText size={15} />
+              {showUpload ? 'Cancel Upload' : 'Upload Document'}
+            </button>
+          )}
         </div>
 
-        <div className="space-y-6 w-full">
-          <section className="w-full space-y-6 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p className="text-sm uppercase tracking-[0.25em] text-slate-500">Submit evidence</p>
-                <h2 className="mt-2 text-2xl font-semibold text-slate-900">Upload a document</h2>
-              </div>
-              <div className="inline-flex items-center gap-2 rounded-3xl bg-slate-50 px-4 py-2 text-sm text-slate-700">
-                <FileText size={16} /> File upload
-              </div>
+        {/* ── Alerts ── */}
+        {message && (
+          <div className="alert alert-success">
+            <span>{message}</span>
+            <button type="button" onClick={() => setMessage('')} className="ml-auto"><X size={14} /></button>
+          </div>
+        )}
+        {error && (
+          <div className="alert alert-danger">
+            <span>{typeof error === 'string' ? error : JSON.stringify(error)}</span>
+            <button type="button" onClick={() => setError('')} className="ml-auto"><X size={14} /></button>
+          </div>
+        )}
+
+        {/* ── Upload panel ── */}
+        {user?.role === 'EMPLOYEE' && showUpload && (
+          <div className="card animate-slide-up">
+            <div className="card-header">
+              <h2 className="card-title">Upload Document</h2>
             </div>
-
-            {message && <div className="rounded-3xl bg-emerald-50 p-4 text-sm text-emerald-700">{message}</div>}
-            {error && <div className="rounded-3xl bg-red-50 p-4 text-sm text-red-700">{typeof error === 'string' ? error : JSON.stringify(error)}</div>}
-
-            {user?.role === 'EMPLOYEE' ? (
+            <div className="card-body">
               <UploadBox
                 normes={normes}
                 selectedNorme={selectedNorme}
@@ -245,130 +225,190 @@ const Documents = () => {
                 onError={setError}
                 onSubmit={handleUpload}
               />
-            ) : (
-              <div className="rounded-3xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600">
-                Only employees may submit documents. Admins and team leads may review and update statuses in the table below.
-              </div>
-            )}
-          </section>
+            </div>
+          </div>
+        )}
 
+        {user?.role !== 'EMPLOYEE' && (
+          <div className="alert alert-info">
+            <FileText size={14} className="shrink-0" />
+            <span>Only employees may submit documents. Admins and team leads can review and update statuses below.</span>
+          </div>
+        )}
+
+        {/* ── KPI stats ── */}
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+          <StatCard label="Total"     value={counts.total}     color="text-slate-900"   loading={loading} />
+          <StatCard label="Approved"  value={counts.approved}  color="text-emerald-600" loading={loading} />
+          <StatCard label="Reviewing" value={counts.reviewing} color="text-sky-600"     loading={loading} />
+          <StatCard label="Pending"   value={counts.pending}   color="text-amber-600"   loading={loading} />
+          <StatCard label="Rejected"  value={counts.rejected}  color="text-red-600"     loading={loading} />
         </div>
 
-        <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p className="text-sm uppercase tracking-[0.25em] text-slate-500">Submitted documents</p>
-                <h2 className="mt-2 text-xl font-semibold text-slate-900">Compliance dashboard</h2>
-              </div>
+        {/* ── Filters ── */}
+        <div className="card">
+          <div className="p-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+            {/* Search */}
+            <div className="relative flex-1">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                type="search"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Search filename, employee, norme, ID…"
+                className="form-input pl-9"
+              />
             </div>
 
-            {/* Stats cards */}
-            <div className="mt-6 grid gap-4 sm:grid-cols-5">
-              <div className="rounded-2xl bg-white p-4 shadow-sm text-sm">
-                <p className="text-xs text-slate-500">Total documents</p>
-                <div className="mt-2 text-2xl font-semibold">{counts.total}</div>
+            {/* Filters row */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-1 text-xs text-slate-500 font-medium">
+                <SlidersHorizontal size={13} />
+                <span>Filter:</span>
               </div>
-              <div className="rounded-2xl bg-white p-4 shadow-sm text-sm">
-                <p className="text-xs text-slate-500">Approved</p>
-                <div className="mt-2 text-2xl font-semibold text-emerald-600">{counts.approved}</div>
-              </div>
-              <div className="rounded-2xl bg-white p-4 shadow-sm text-sm">
-                <p className="text-xs text-slate-500">Rejected</p>
-                <div className="mt-2 text-2xl font-semibold text-rose-600">{counts.rejected}</div>
-              </div>
-              <div className="rounded-2xl bg-white p-4 shadow-sm text-sm">
-                <p className="text-xs text-slate-500">Pending</p>
-                <div className="mt-2 text-2xl font-semibold text-amber-500">{counts.pending}</div>
-              </div>
-              <div className="rounded-2xl bg-white p-4 shadow-sm text-sm">
-                <p className="text-xs text-slate-500">Reviewing</p>
-                <div className="mt-2 text-2xl font-semibold text-sky-600">{counts.reviewing}</div>
-              </div>
+              <select
+                value={statusFilter}
+                onChange={e => setStatusFilter(e.target.value)}
+                className="form-select w-auto text-xs py-1.5"
+              >
+                <option value="">All statuses</option>
+                {Object.entries(statusLabels).map(([k,v]) => <option key={k} value={k}>{v}</option>)}
+              </select>
+              <select
+                value={selectedNorme}
+                onChange={e => setSelectedNorme(e.target.value)}
+                className="form-select w-auto text-xs py-1.5"
+              >
+                <option value="">All standards</option>
+                {normes.map(n => <option key={n.id} value={n.id}>{n.name}</option>)}
+              </select>
+              <select
+                value={sortBy}
+                onChange={e => setSortBy(e.target.value)}
+                className="form-select w-auto text-xs py-1.5"
+              >
+                <option value="newest">Newest first</option>
+                <option value="oldest">Oldest first</option>
+                <option value="highest">Highest compliance</option>
+                <option value="lowest">Lowest compliance</option>
+              </select>
+              {(search || statusFilter || selectedNorme) && (
+                <button
+                  type="button"
+                  onClick={() => { setSearch(''); setStatusFilter(''); setSelectedNorme(''); }}
+                  className="btn-ghost btn-sm text-slate-500"
+                >
+                  <X size={12} /> Clear
+                </button>
+              )}
             </div>
+          </div>
 
-            {/* Search + filters + sort */}
-            <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex items-center gap-2 w-full">
-                <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search filename, employee, norme, teamlead, id, status" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none" />
-              </div>
-              <div className="flex items-center gap-2">
-                <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm">
-                  <option value="">All status</option>
-                  <option value="pending">Pending</option>
-                  <option value="reviewing">Reviewing</option>
-                  <option value="approved">Approved</option>
-                  <option value="rejected">Rejected</option>
-                </select>
-                <select value={selectedNorme} onChange={(e) => setSelectedNorme(e.target.value)} className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm">
-                  <option value="">All normes</option>
-                  {normes.map((n) => <option key={n.id} value={n.id}>{n.name}</option>)}
-                </select>
-                <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm">
-                  <option value="newest">Newest</option>
-                  <option value="oldest">Oldest</option>
-                  <option value="highest">Highest compliance</option>
-                  <option value="lowest">Lowest compliance</option>
-                </select>
-              </div>
-            </div>
-
-          <div className="mt-6 overflow-x-auto">
-            <table className="min-w-full divide-y divide-slate-200 text-sm">
-              <thead className="bg-slate-50 text-slate-700">
+          {/* ── Table ── */}
+          <div className="overflow-x-auto border-t border-slate-100">
+            <table className="table-enterprise">
+              <thead>
                 <tr>
-                  <th className="px-4 py-3 text-left font-semibold">ID</th>
-                  <th className="px-4 py-3 text-left font-semibold">Filename</th>
-                  <th className="px-4 py-3 text-left font-semibold">Norme</th>
-                  <th className="px-4 py-3 text-left font-semibold">Employee</th>
-                  <th className="px-4 py-3 text-left font-semibold">Compliance</th>
-                  <th className="px-4 py-3 text-left font-semibold">Status</th>
-                  <th className="px-4 py-3 text-left font-semibold">TeamLead</th>
-                  <th className="px-4 py-3 text-left font-semibold">Created</th>
-                  <th className="px-4 py-3 text-left font-semibold">Updated</th>
-                  <th className="px-4 py-3 text-left font-semibold">Actions</th>
+                  <th>ID</th>
+                  <th>Filename</th>
+                  <th>Standard</th>
+                  <th>Employee</th>
+                  <th>Score</th>
+                  <th>Status</th>
+                  <th>Team Lead</th>
+                  <th>Created</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-200">
+              <tbody>
                 {loading ? (
-                  <tr><td colSpan="10" className="px-4 py-6 text-center text-slate-500">Loading documents...</td></tr>
+                  [1,2,3,4,5].map(i => <SkeletonRow key={i} />)
                 ) : documents.length === 0 ? (
-                  <tr><td colSpan="10" className="px-4 py-6 text-center text-slate-500">No documents found.</td></tr>
+                  <tr>
+                    <td colSpan={9} className="px-4 py-10">
+                      <EmptyState
+                        icon="search"
+                        title="No documents found"
+                        description="Try adjusting the filters or upload a new document."
+                      />
+                    </td>
+                  </tr>
                 ) : (
-                  documents.map((document) => (
-                    <tr key={document.id} className="hover:bg-slate-50">
-                      <td className="px-4 py-4 font-mono text-xs">#{document.id}</td>
-                      <td className="px-4 py-4">{document.file ? document.file.split('/').pop() : (document.file_url || '—')}</td>
-                      <td className="px-4 py-4">{normeMap[document.norme] || `Norme #${document.norme}`}</td>
-                      <td className="px-4 py-4">{document.employee_username}</td>
-                      <td className="px-4 py-4">{typeof document.compliance_score === 'number' ? `${document.compliance_score}%` : '—'}</td>
-                      <td className="px-4 py-4">
+                  documents.map(doc => (
+                    <tr key={doc.id}>
+                      <td>
+                        <span className="font-mono text-xs text-slate-500">#{doc.id}</span>
+                      </td>
+                      <td>
+                        <div className="flex items-center gap-2">
+                          <FileText size={13} className="text-slate-400 shrink-0" />
+                          <span className="text-sm font-medium text-slate-800 max-w-[180px] truncate">
+                            {doc.file ? doc.file.split('/').pop() : (doc.file_url || '—')}
+                          </span>
+                        </div>
+                      </td>
+                      <td>
+                        <span className="text-xs font-medium text-slate-600">
+                          {normeMap[doc.norme] || `#${doc.norme}`}
+                        </span>
+                      </td>
+                      <td className="text-sm">{doc.employee_username || '—'}</td>
+                      <td>
+                        {typeof doc.compliance_score === 'number' ? (
+                          <div className="flex items-center gap-2">
+                            <div className="w-16 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full rounded-full ${doc.compliance_score >= 80 ? 'bg-emerald-500' : doc.compliance_score >= 60 ? 'bg-amber-500' : 'bg-red-500'}`}
+                                style={{ width: `${doc.compliance_score}%` }}
+                              />
+                            </div>
+                            <span className={`text-xs font-bold tabular-nums ${doc.compliance_score >= 80 ? 'text-emerald-600' : doc.compliance_score >= 60 ? 'text-amber-600' : 'text-red-600'}`}>
+                              {doc.compliance_score}%
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-slate-400">—</span>
+                        )}
+                      </td>
+                      <td>
                         {(user?.role === 'ADMIN' || user?.role === 'TEAMLEAD') ? (
                           <select
-                            value={document.status}
-                            onChange={(e) => updateStatus(document.id, e.target.value)}
-                            disabled={updatingStatusId === document.id}
-                            className="w-full rounded-3xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm outline-none"
+                            value={doc.status}
+                            onChange={e => updateStatus(doc.id, e.target.value)}
+                            disabled={updatingId === doc.id}
+                            className="form-select text-xs py-1 w-32"
                           >
-                            {Object.entries(statusLabels).map(([key, label]) => (
-                              <option key={key} value={key}>{label}</option>
+                            {Object.entries(statusLabels).map(([k,v]) => (
+                              <option key={k} value={k}>{v}</option>
                             ))}
                           </select>
                         ) : (
-                          <span className="inline-flex rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-slate-700">
-                            {statusLabels[document.status] || document.status}
-                          </span>
+                          <StatusBadge status={doc.status} />
                         )}
                       </td>
-                      <td className="px-4 py-4">{document.teamlead_username || '—'}</td>
-                      <td className="px-4 py-4">{new Date(document.created_at).toLocaleDateString()}</td>
-                      <td className="px-4 py-4">{document.updated_at ? new Date(document.updated_at).toLocaleDateString() : '—'}</td>
-                      <td className="px-4 py-4">
-                        <Link to={`/validations?document=${document.id}`} className="text-slate-600 hover:text-slate-900 text-sm mr-3">
-                          Review
-                        </Link>
-                        {document.file_url && (
-                          <a href={document.file_url} target="_blank" rel="noreferrer" className="text-sky-600 hover:text-sky-700 text-sm">Open</a>
-                        )}
+                      <td className="text-sm text-slate-500">{doc.teamlead_username || '—'}</td>
+                      <td className="text-xs text-slate-500">{fmt(doc.created_at)}</td>
+                      <td>
+                        <div className="flex items-center gap-1">
+                          <Link
+                            to={`/validations?document=${doc.id}`}
+                            className="btn-icon-sm text-brand-500 hover:bg-brand-50 hover:text-brand-700"
+                            title="Review"
+                          >
+                            <ClipboardCheck size={13} />
+                          </Link>
+                          {doc.file_url && (
+                            <a
+                              href={doc.file_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="btn-icon-sm text-slate-500 hover:bg-slate-100"
+                              title="Open file"
+                            >
+                              <ExternalLink size={13} />
+                            </a>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -377,16 +417,34 @@ const Documents = () => {
             </table>
           </div>
 
-          {/* Pagination */}
-          <div className="mt-4 flex items-center justify-between">
-            <div className="text-sm text-slate-600">{total} documents</div>
-            <div className="flex items-center gap-2">
-              <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1} className="px-3 py-1 rounded border">Prev</button>
-              <div className="px-3 py-1">Page {page}</div>
-              <button onClick={() => setPage((p) => p + 1)} disabled={documents.length < pageSize} className="px-3 py-1 rounded border">Next</button>
+          {/* ── Pagination ── */}
+          {total > pageSize && (
+            <div className="flex items-center justify-between border-t border-slate-100 px-4 py-3">
+              <span className="text-xs text-slate-500">
+                Showing {(page-1)*pageSize+1}–{Math.min(page*pageSize, total)} of <strong>{total}</strong>
+              </span>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setPage(p => Math.max(1, p-1))}
+                  disabled={page === 1}
+                  className="btn-icon-sm border border-slate-200 disabled:opacity-40"
+                >
+                  <ChevronLeft size={13} />
+                </button>
+                <span className="px-3 text-xs font-medium text-slate-600">
+                  Page {page} / {totalPages}
+                </span>
+                <button
+                  onClick={() => setPage(p => Math.min(totalPages, p+1))}
+                  disabled={page >= totalPages}
+                  className="btn-icon-sm border border-slate-200 disabled:opacity-40"
+                >
+                  <ChevronRight size={13} />
+                </button>
+              </div>
             </div>
-          </div>
-        </section>
+          )}
+        </div>
       </div>
     </Layout>
   );

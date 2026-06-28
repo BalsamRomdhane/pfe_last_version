@@ -5,7 +5,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ShieldCheck, ShieldAlert, Shield, AlertTriangle, RefreshCw,
-  BarChart3, Clock, FileWarning, Activity, TrendingUp, BookOpen, List,
+  BarChart3, Clock, FileWarning, Activity, TrendingUp, BookOpen,
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import api from '../services/api';
@@ -292,9 +292,9 @@ export default function ComplianceDashboard() {
 
   return (
     <Layout>
-      <div className="space-y-6 pb-10">
+      <div className="page-container">
         {/* Hero */}
-        <div className="overflow-hidden rounded-2xl bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 px-6 py-6 shadow-xl">
+        <div className="overflow-hidden rounded-xl border border-slate-800 bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 px-6 py-6 shadow-lg">
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div className="flex items-center gap-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-500/20">

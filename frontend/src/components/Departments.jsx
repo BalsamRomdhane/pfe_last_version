@@ -1,269 +1,293 @@
 import React, { useContext, useState, useEffect, useMemo } from 'react';
 import { UserContext } from '../context/UserContext';
 import Layout from './Layout';
-import {
-  Building,
-  Search,
-  Plus,
-  Edit3,
-  Trash2,
-  Eye,
-  Loader2,
-} from 'lucide-react';
+import { Building2, Search, Plus, Edit3, Trash2, Eye, X, CheckCircle2 } from 'lucide-react';
 import api from '../services/api';
 import DepartmentModal from './DepartmentModal';
+import EmptyState from './common/EmptyState';
 
+/* ─── Department card ──────────────────────────────────────────────────── */
+function DeptCard({ dept, onView, onEdit, onDelete }) {
+  const initials = (dept.name || dept.code || '?')
+    .split(' ')
+    .map(w => w[0])
+    .slice(0, 2)
+    .join('')
+    .toUpperCase();
+
+  const color = dept.theme_color || '#2563eb';
+
+  return (
+    <div className="card group hover:shadow-card-hover transition-all duration-200 hover:-translate-y-px">
+      <div className="p-5">
+        <div className="flex items-start justify-between gap-3">
+          {/* Icon + info */}
+          <div className="flex items-center gap-3 min-w-0">
+            <div
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-sm font-bold text-white shadow-sm"
+              style={{ backgroundColor: color }}
+            >
+              {initials}
+            </div>
+            <div className="min-w-0">
+              <p className="text-base font-semibold text-slate-900 truncate">{dept.name}</p>
+              <div className="flex items-center gap-2 mt-0.5">
+                <span className="badge badge-slate text-2xs">{dept.code}</span>
+                {dept.user_count != null && (
+                  <span className="text-2xs text-slate-400">{dept.user_count} users</span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Color swatch */}
+          <div
+            className="h-5 w-5 shrink-0 rounded-md border border-black/10 shadow-sm"
+            style={{ backgroundColor: color }}
+            title={color}
+          />
+        </div>
+
+        {dept.description && (
+          <p className="mt-3 text-xs text-slate-500 leading-relaxed line-clamp-2">
+            {dept.description}
+          </p>
+        )}
+
+        {/* Actions */}
+        <div className="mt-4 flex items-center gap-2 pt-3 border-t border-slate-100">
+          <button
+            type="button"
+            onClick={() => onView(dept)}
+            className="btn-ghost btn-sm flex-1 justify-center text-slate-600"
+          >
+            <Eye size={13} /> View
+          </button>
+          <button
+            type="button"
+            onClick={() => onEdit(dept)}
+            className="btn-secondary btn-sm flex-1 justify-center"
+          >
+            <Edit3 size={13} /> Edit
+          </button>
+          <button
+            type="button"
+            onClick={() => onDelete(dept)}
+            className="btn-icon-sm text-red-500 hover:bg-red-50 border border-slate-200"
+            aria-label="Delete"
+          >
+            <Trash2 size={13} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Departments page ─────────────────────────────────────────────────── */
 const Departments = () => {
-  const { user } = useContext(UserContext);
-  const [departments, setDepartments] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [searchTerm, setSearchTerm] = useState('');
-  const [toast, setToast] = useState(null);
-  const [modalState, setModalState] = useState({ open: false, mode: 'create', department: null });
-  const [viewDepartment, setViewDepartment] = useState(null);
-  const [confirmDelete, setConfirmDelete] = useState(null);
-  const [actionLoading, setActionLoading] = useState(false);
-  const [modalError, setModalError] = useState('');
+  const { user }       = useContext(UserContext);
+  const [departments,  setDepartments]  = useState([]);
+  const [loading,      setLoading]      = useState(true);
+  const [search,       setSearch]       = useState('');
+  const [toast,        setToast]        = useState(null);
+  const [modalState,   setModalState]   = useState({ open: false, mode: 'create', dept: null });
+  const [viewDept,     setViewDept]     = useState(null);
+  const [confirmDel,   setConfirmDel]   = useState(null);
+  const [actionLoad,   setActionLoad]   = useState(false);
+  const [modalError,   setModalError]   = useState('');
 
-  useEffect(() => {
-    fetchDepartments();
-  }, []);
+  useEffect(() => { fetchDepts(); }, []);
 
-  const showToast = (message, type = 'success') => {
-    setToast({ message, type });
-    window.setTimeout(() => setToast(null), 3800);
+  const showToast = (msg, type = 'success') => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 4000);
   };
 
-  const fetchDepartments = async () => {
+  const fetchDepts = async () => {
+    setLoading(true);
     try {
-      setLoading(true);
-      const response = await api.get('/rbac/departments/');
-      const payload = response.data;
-      const departmentList = Array.isArray(payload) ? payload : payload?.data || [];
-      setDepartments(departmentList);
-      setError('');
-    } catch (err) {
-      setError('Unable to load departments.');
-    } finally {
-      setLoading(false);
-    }
+      const res  = await api.get('/rbac/departments/');
+      const data = Array.isArray(res.data) ? res.data : (res.data?.data || []);
+      setDepartments(data);
+    } catch {}
+    finally { setLoading(false); }
   };
 
-  const openCreateModal = () => {
-    setModalError('');
-    setModalState({ open: true, mode: 'create', department: null });
-  };
+  const openCreate = () => { setModalError(''); setModalState({ open: true, mode: 'create', dept: null }); };
+  const openEdit   = (d) => { setModalError(''); setModalState({ open: true, mode: 'edit', dept: d }); };
+  const closeModal = ()  => { setModalState({ open: false, mode: 'create', dept: null }); setModalError(''); };
 
-  const openEditModal = (department) => {
-    setModalError('');
-    setModalState({ open: true, mode: 'edit', department });
-  };
-
-  const openViewModal = (department) => {
-    setViewDepartment(department);
-  };
-
-  const closeModal = () => {
-    setModalState({ open: false, mode: 'create', department: null });
-    setModalError('');
-  };
-
-  const closeViewModal = () => {
-    setViewDepartment(null);
-  };
-
-  const handleModalSubmit = async (departmentData) => {
-    if (!departmentData.name || !departmentData.code) {
-      setModalError('Name and code are required.');
-      return;
-    }
-
+  const handleModalSubmit = async (data) => {
+    if (!data.name || !data.code) { setModalError('Name and code are required.'); return; }
+    setActionLoad(true);
     try {
-      setActionLoading(true);
       if (modalState.mode === 'create') {
-        await api.post('/rbac/departments/', departmentData);
-        showToast('Department created successfully.');
-      } else if (modalState.department?.code) {
-        await api.put(`/rbac/departments/${modalState.department.code}/`, departmentData);
-        showToast('Department updated successfully.');
-      } else {
-        throw new Error('Invalid department selected for update.');
+        await api.post('/rbac/departments/', data);
+        showToast('Department created.');
+      } else if (modalState.dept?.code) {
+        await api.put(`/rbac/departments/${modalState.dept.code}/`, data);
+        showToast('Department updated.');
       }
       closeModal();
-      fetchDepartments();
-    } catch (err) {
-      setModalError('Unable to save department. Please try again.');
-    } finally {
-      setActionLoading(false);
-    }
+      fetchDepts();
+    } catch { setModalError('Unable to save department. Please try again.'); }
+    finally { setActionLoad(false); }
   };
 
   const handleDelete = async () => {
-    if (!confirmDelete) {
-      return;
-    }
-
+    if (!confirmDel) return;
+    setActionLoad(true);
     try {
-      setActionLoading(true);
-      await api.delete(`/rbac/departments/${confirmDelete.code}/`);
-      showToast('Department deleted successfully.');
-      setConfirmDelete(null);
-      fetchDepartments();
-    } catch (err) {
-      setError('Unable to delete department.');
-    } finally {
-      setActionLoading(false);
-    }
+      await api.delete(`/rbac/departments/${confirmDel.code}/`);
+      showToast('Department deleted.');
+      setConfirmDel(null);
+      fetchDepts();
+    } catch { showToast('Unable to delete department.', 'error'); setConfirmDel(null); }
+    finally { setActionLoad(false); }
   };
 
-  const filteredDepartments = useMemo(() => {
-    return departments.filter((dept) =>
-      dept.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      dept.code.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (dept.description || '').toLowerCase().includes(searchTerm.toLowerCase())
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase();
+    return departments.filter(d =>
+      d.name?.toLowerCase().includes(q) ||
+      d.code?.toLowerCase().includes(q) ||
+      (d.description || '').toLowerCase().includes(q)
     );
-  }, [departments, searchTerm]);
+  }, [departments, search]);
 
   if (user?.role !== 'ADMIN') {
-    return (
-      <Layout>
-        <div className="rounded-xl bg-white p-10 shadow">
-          <h2 className="text-2xl font-semibold">Access Denied</h2>
-        </div>
-      </Layout>
-    );
+    return <Layout><EmptyState title="Access Denied" description="You don't have permission to view this page." /></Layout>;
   }
 
   return (
     <Layout>
-      <div className="space-y-6">
-        {toast && (
-          <div className={`rounded-3xl px-5 py-4 shadow ${toast.type === 'error' ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'}`}>
-            {toast.message}
-          </div>
-        )}
+      <div className="page-container">
 
-        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        {/* ── Header ── */}
+        <div className="page-header">
           <div>
-            <h1 className="text-3xl font-bold">Departments</h1>
-            <p className="mt-1 text-sm text-slate-500">Manage the corporate department catalog and theme settings.</p>
+            <p className="section-label">Administration</p>
+            <h1 className="page-title mt-1">Departments</h1>
+            <p className="page-subtitle">Manage corporate departments, themes and user assignments.</p>
           </div>
-          <button
-            type="button"
-            onClick={openCreateModal}
-            className="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-blue-700"
-          >
-            <Plus size={16} /> Add Department
+          <button type="button" onClick={openCreate} className="btn-primary">
+            <Plus size={15} /> Add Department
           </button>
         </div>
 
-        <div className="flex items-center gap-2 rounded-3xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
-          <Search size={18} className="text-slate-400" />
-          <input
-            type="text"
-            placeholder="Search departments..."
-            className="w-full bg-transparent text-sm text-slate-900 outline-none"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
-        </div>
+        {/* ── Toast ── */}
+        {toast && (
+          <div className={`alert ${toast.type === 'error' ? 'alert-danger' : 'alert-success'}`}>
+            <CheckCircle2 size={14} className="shrink-0" />
+            {toast.msg}
+            <button onClick={() => setToast(null)} className="ml-auto"><X size={13}/></button>
+          </div>
+        )}
 
-        {loading ? (
-          <div className="rounded-3xl bg-white p-8 text-center text-slate-600 shadow-sm">Loading departments…</div>
-        ) : error ? (
-          <div className="rounded-3xl border border-red-200 bg-red-50 p-6 text-red-700">{error}</div>
-        ) : filteredDepartments.length === 0 ? (
-          <div className="rounded-3xl bg-white p-8 text-center text-slate-600 shadow-sm">No matching departments found.</div>
-        ) : (
-          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-            {filteredDepartments.map((dept) => (
-              <div
-                key={dept.id || dept.code}
-                className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg"
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <h2 className="text-xl font-semibold text-slate-900">{dept.name}</h2>
-                    <p className="mt-2 text-sm uppercase tracking-[0.2em] text-slate-500">{dept.code}</p>
-                  </div>
-                  <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-700" style={{ borderColor: dept.theme_color || '#0ea5e9', color: dept.theme_color || '#0ea5e9' }}>
-                    <Building />
-                  </span>
-                </div>
-
-                <p className="mt-5 text-slate-600">{dept.description || 'No description provided.'}</p>
-
-                <div className="mt-6 flex flex-wrap gap-3">
-                  <button
-                    type="button"
-                    onClick={() => openViewModal(dept)}
-                    className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 px-4 py-2 text-sm text-slate-700 transition hover:bg-slate-100"
-                  >
-                    <Eye size={16} /> View
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => openEditModal(dept)}
-                    className="inline-flex items-center gap-2 rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
-                  >
-                    <Edit3 size={16} /> Edit
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setConfirmDelete(dept)}
-                    className="inline-flex items-center gap-2 rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-700"
-                  >
-                    <Trash2 size={16} /> Delete
-                  </button>
-                </div>
+        {/* ── Stats bar ── */}
+        {!loading && departments.length > 0 && (
+          <div className="flex items-center gap-4 text-xs text-slate-500">
+            <span className="font-medium text-slate-700">{departments.length} departments</span>
+            {departments.map(d => (
+              <div key={d.code} className="flex items-center gap-1.5">
+                <span
+                  className="h-2.5 w-2.5 rounded-full"
+                  style={{ backgroundColor: d.theme_color || '#94a3b8' }}
+                />
+                <span>{d.name}</span>
               </div>
             ))}
           </div>
         )}
 
+        {/* ── Search ── */}
+        <div className="relative max-w-sm">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            type="search"
+            placeholder="Search departments…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="form-input pl-9"
+          />
+        </div>
+
+        {/* ── Grid ── */}
+        {loading ? (
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {[1,2,3,4].map(i => (
+              <div key={i} className="card p-5 animate-pulse space-y-3">
+                <div className="flex gap-3">
+                  <div className="skeleton h-11 w-11 rounded-xl" />
+                  <div className="flex-1 space-y-2">
+                    <div className="skeleton h-5 w-1/2" />
+                    <div className="skeleton h-4 w-1/4" />
+                  </div>
+                </div>
+                <div className="skeleton h-3 w-3/4" />
+                <div className="skeleton h-8 rounded-lg" />
+              </div>
+            ))}
+          </div>
+        ) : filtered.length === 0 ? (
+          <EmptyState
+            icon={Building2}
+            title={search ? 'No departments match' : 'No departments yet'}
+            description="Add your first department to get started."
+          />
+        ) : (
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {filtered.map(dept => (
+              <DeptCard
+                key={dept.id || dept.code}
+                dept={dept}
+                onView={setViewDept}
+                onEdit={openEdit}
+                onDelete={setConfirmDel}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* ── Modals ── */}
         <DepartmentModal
           open={modalState.open}
           mode={modalState.mode}
-          initialData={modalState.department || {}}
+          initialData={modalState.dept || {}}
           onClose={closeModal}
           onSubmit={handleModalSubmit}
-          loading={actionLoading}
+          loading={actionLoad}
           error={modalError}
         />
 
         <DepartmentModal
-          open={Boolean(viewDepartment)}
+          open={Boolean(viewDept)}
           mode="view"
-          initialData={viewDepartment || {}}
-          onClose={closeViewModal}
+          initialData={viewDept || {}}
+          onClose={() => setViewDept(null)}
           onSubmit={() => {}}
           loading={false}
           error=""
         />
 
-        {confirmDelete && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4 py-6">
-            <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl ring-1 ring-slate-200">
-              <h3 className="text-xl font-semibold text-slate-900">Delete department</h3>
-              <p className="mt-3 text-slate-600">Are you sure you want to delete <span className="font-semibold">{confirmDelete.name}</span>? This action cannot be undone.</p>
-              <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-end">
-                <button
-                  type="button"
-                  onClick={() => setConfirmDelete(null)}
-                  className="rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
-                  disabled={actionLoading}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={handleDelete}
-                  className="inline-flex items-center justify-center gap-2 rounded-2xl bg-red-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-red-700 disabled:opacity-70"
-                  disabled={actionLoading}
-                >
-                  {actionLoading ? 'Deleting...' : 'Delete'}
-                  <Loader2 size={16} />
+        {confirmDel && (
+          <div className="modal-backdrop" onClick={() => setConfirmDel(null)}>
+            <div className="modal-panel max-w-md" onClick={e => e.stopPropagation()}>
+              <div className="modal-header">
+                <h3 className="text-base font-semibold text-slate-900">Delete Department</h3>
+                <button onClick={() => setConfirmDel(null)} className="btn-icon-sm"><X size={14}/></button>
+              </div>
+              <div className="modal-body">
+                <p className="text-sm text-slate-600">
+                  Delete <strong className="text-slate-900">{confirmDel.name}</strong>?
+                  This action is irreversible.
+                </p>
+              </div>
+              <div className="modal-footer">
+                <button onClick={() => setConfirmDel(null)} className="btn-secondary" disabled={actionLoad}>Cancel</button>
+                <button onClick={handleDelete} className="btn-danger" disabled={actionLoad}>
+                  {actionLoad ? 'Deleting…' : 'Delete'}
                 </button>
               </div>
             </div>

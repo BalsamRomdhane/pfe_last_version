@@ -1,31 +1,33 @@
 import React from 'react';
+import { CheckCircle, XCircle, Clock, RotateCcw } from 'lucide-react';
 
-const statusConfig = {
-  approved: {
-    label: 'Approved',
-    className: 'inline-flex rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700',
-  },
-  rejected: {
-    label: 'Rejected',
-    className: 'inline-flex rounded-full bg-rose-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-rose-700',
-  },
-  reviewing: {
-    label: 'Reviewing',
-    className: 'inline-flex rounded-full bg-sky-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-sky-700',
-  },
-  pending: {
-    label: 'Pending',
-    className: 'inline-flex rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-amber-700',
-  },
+const CONFIG = {
+  approved:  { label: 'Approved',  cls: 'badge-green',  dot: 'bg-emerald-500', Icon: CheckCircle },
+  rejected:  { label: 'Rejected',  cls: 'badge-red',    dot: 'bg-red-500',     Icon: XCircle    },
+  reviewing: { label: 'Reviewing', cls: 'badge-sky',    dot: 'bg-sky-500',     Icon: RotateCcw  },
+  pending:   { label: 'Pending',   cls: 'badge-amber',  dot: 'bg-amber-500',   Icon: Clock      },
 };
 
-const StatusBadge = ({ status }) => {
-  const config = statusConfig[status] || {
-    label: status?.toString() || 'Unknown',
-    className: 'inline-flex rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-slate-700',
+const StatusBadge = ({ status, showIcon = true, size = 'sm' }) => {
+  const cfg = CONFIG[status] || {
+    label: status || 'Unknown',
+    cls: 'badge-slate',
+    dot: 'bg-slate-400',
+    Icon: null,
   };
 
-  return <span className={config.className}>{config.label}</span>;
+  const Icon = cfg.Icon;
+
+  return (
+    <span className={`badge ${cfg.cls} ${size === 'xs' ? 'text-2xs px-1.5 py-0.5' : ''}`}>
+      {showIcon && Icon ? (
+        <Icon size={10} />
+      ) : (
+        <span className={`status-dot ${cfg.dot}`} />
+      )}
+      {cfg.label}
+    </span>
+  );
 };
 
 export default StatusBadge;

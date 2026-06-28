@@ -6,8 +6,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Database, CheckCircle2, XCircle, BarChart3, Shield,
-  TrendingUp, RefreshCw, AlertTriangle, Zap, Target,
-  ChevronDown, ChevronUp, Search, GitBranch, Clock,
+  TrendingUp, RefreshCw, AlertTriangle, Target,
+  ChevronDown, ChevronUp, GitBranch,
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import api from '../services/api';
@@ -126,9 +126,9 @@ export default function TrainingDataset() {
   const PAGE_SIZE = 10;
   const [loading,   setLoading]   = useState(true);
   const [activeTab, setActiveTab] = useState('overview');
-  const [search,    setSearch]    = useState('');
+  const [search,    setSearch]    = useState(''); // eslint-disable-line no-unused-vars
   const [labelFilter, setLabelFilter] = useState('');
-  const [sortBy,    setSortBy]    = useState('-created_at');
+  const [sortBy,    setSortBy]    = useState('-created_at'); // eslint-disable-line no-unused-vars
 
   /* Load norms */
   useEffect(() => {
@@ -187,7 +187,7 @@ export default function TrainingDataset() {
   const dupRate  = stats?.duplicate_rate ?? 0;
   const covRate  = stats?.coverage_rate ?? 0;
   const richness = stats?.dataset_richness ?? 0;
-  const trainingReady = stats?.training_enabled ?? false;
+  const trainingReady = stats?.training_enabled ?? false; // eslint-disable-line no-unused-vars
 
   /* Compute training readiness score */
   const readinessScore = useMemo(() => {
@@ -217,10 +217,10 @@ export default function TrainingDataset() {
 
   return (
     <Layout>
-      <div className="space-y-6 pb-10">
+      <div className="page-container">
 
         {/* ── Hero ── */}
-        <div className="overflow-hidden rounded-2xl bg-gradient-to-br from-slate-900 via-sky-950 to-slate-900 px-6 py-6 shadow-xl">
+        <div className="overflow-hidden rounded-xl border border-slate-800 bg-gradient-to-br from-slate-900 via-sky-950 to-slate-900 px-6 py-6 shadow-lg">
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div className="flex items-center gap-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-500/20">

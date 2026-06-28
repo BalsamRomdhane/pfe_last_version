@@ -1,260 +1,322 @@
 import React, { useContext, useState, useEffect, useMemo } from 'react';
 import { UserContext } from '../context/UserContext';
 import Layout from './Layout';
-import { Edit3, Trash2, Plus } from 'lucide-react';
+import { Edit3, Trash2, Plus, Search, X, CheckCircle2, Filter } from 'lucide-react';
 import api from '../services/api';
 import UserModal from './UserModal';
+import EmptyState from './common/EmptyState';
 
-const roleClasses = {
-  ADMIN: 'bg-orange-100 text-orange-800',
-  TEAMLEAD: 'bg-blue-100 text-blue-800',
-  EMPLOYEE: 'bg-slate-100 text-slate-800',
+/* ─── Role badge ───────────────────────────────────────────────────────── */
+const ROLE_CLS = {
+  ADMIN:    'bg-amber-50 text-amber-700 ring-1 ring-amber-200',
+  TEAMLEAD: 'bg-violet-50 text-violet-700 ring-1 ring-violet-200',
+  EMPLOYEE: 'badge-slate',
 };
 
+/* ─── Skeleton row ─────────────────────────────────────────────────────── */
+function SkeletonRow() {
+  return (
+    <tr>
+      {[1,2,3,4,5,6].map(i => (
+        <td key={i} className="px-4 py-3">
+          <div className="skeleton h-4 rounded" style={{ width: `${50 + i * 8}%` }} />
+        </td>
+      ))}
+    </tr>
+  );
+}
+
+/* ─── Users page ───────────────────────────────────────────────────────── */
 const Users = () => {
-  const { user } = useContext(UserContext);
+  const { user }          = useContext(UserContext);
+  const [users,           setUsers]          = useState([]);
+  const [departments,     setDepartments]    = useState([]);
+  const [loading,         setLoading]        = useState(true);
+  const [search,          setSearch]         = useState('');
+  const [roleFilter,      setRoleFilter]     = useState('ALL');
+  const [deptFilter,      setDeptFilter]     = useState('ALL');
+  const [modalOpen,       setModalOpen]      = useState(false);
+  const [selectedUser,    setSelectedUser]   = useState(null);
+  const [confirmDelete,   setConfirmDelete]  = useState(null);
+  const [modalError,      setModalError]     = useState('');
+  const [modalLoading,    setModalLoading]   = useState(false);
+  const [toast,           setToast]          = useState('');
+  const [toastType,       setToastType]      = useState('success');
 
-  const [users, setUsers] = useState([]);
-  const [departments, setDepartments] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [roleFilter, setRoleFilter] = useState('ALL');
-  const [deptFilter, setDeptFilter] = useState('ALL');
-
-  const [modalOpen, setModalOpen] = useState(false);
-  const [selectedUser, setSelectedUser] = useState(null);
-  const [confirmDelete, setConfirmDelete] = useState(null);
-  const [modalError, setModalError] = useState('');
-  const [modalLoading, setModalLoading] = useState(false);
-
-  // ✅ SAFE FETCH
-  useEffect(() => {
-    fetchUsers();
-    fetchDepartments();
-  }, []);
+  useEffect(() => { fetchUsers(); fetchDepartments(); }, []);
 
   const fetchUsers = async () => {
+    setLoading(true);
     try {
-      const res = await api.get('/rbac/users/');
-      let data = res.data?.data || res.data || [];
-
-      if (!Array.isArray(data)) data = [];
-
-      // 🔥 LIMIT DATA TO PREVENT CRASH
-      setUsers(data.slice(0, 200));
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
+      const res  = await api.get('/rbac/users/');
+      const data = res.data?.data || res.data || [];
+      setUsers(Array.isArray(data) ? data.slice(0, 500) : []);
+    } catch {}
+    finally { setLoading(false); }
   };
 
   const fetchDepartments = async () => {
     try {
-      const res = await api.get('/rbac/departments/');
-      let data = res.data?.data || res.data || [];
-      if (!Array.isArray(data)) data = [];
-      setDepartments(data);
-    } catch (err) {}
+      const res  = await api.get('/rbac/departments/');
+      const data = res.data?.data || res.data || [];
+      setDepartments(Array.isArray(data) ? data : []);
+    } catch {}
   };
 
-  // ✅ SAFE FILTER
+  const showToast = (msg, type = 'success') => {
+    setToast(msg); setToastType(type);
+    setTimeout(() => setToast(''), 4000);
+  };
+
   const filteredUsers = useMemo(() => {
-    return users.filter((u) => {
+    const q = search.toLowerCase();
+    return users.filter(u => {
       const text = `${u.username} ${u.email} ${u.department} ${u.role}`.toLowerCase();
-
-      return (
-        text.includes(searchTerm.toLowerCase()) &&
+      return text.includes(q) &&
         (roleFilter === 'ALL' || u.role === roleFilter) &&
-        (deptFilter === 'ALL' || u.department === deptFilter)
-      );
+        (deptFilter === 'ALL' || u.department === deptFilter);
     });
-  }, [users, searchTerm, roleFilter, deptFilter]);
-
-  const roles = ['ADMIN', 'TEAMLEAD', 'EMPLOYEE'];
-  const departmentsList = departments || [];
+  }, [users, search, roleFilter, deptFilter]);
 
   const handleDelete = async () => {
     if (!confirmDelete) return;
-
     try {
       await api.delete(`/rbac/users/${confirmDelete.id}/`);
       setConfirmDelete(null);
       fetchUsers();
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  // eslint-disable-next-line no-unused-vars
-  const getSubmitError = (err) => {
-    const detail = err?.response?.data?.detail;
-    const errMsg = err?.response?.data?.error;
-    if (typeof detail === 'string' && detail.trim()) return detail;
-    if (typeof errMsg === 'string' && errMsg.trim()) return errMsg;
-    if (detail && typeof detail === 'object') return JSON.stringify(detail);
-    return err?.message || 'Unable to save user. Please try again.';
+      showToast('User deleted successfully.');
+    } catch { showToast('Unable to delete user.', 'error'); setConfirmDelete(null); }
   };
 
   const handleModalSubmit = async (payload) => {
-    setModalError('');
-    setModalLoading(true);
-
+    setModalError(''); setModalLoading(true);
     try {
-      if (selectedUser) {
-        await api.put(`/rbac/users/${selectedUser.id}/`, payload);
-      } else {
-        await api.post('/rbac/users/', payload);
-      }
-      setModalOpen(false);
-      setSelectedUser(null);
+      if (selectedUser) await api.put(`/rbac/users/${selectedUser.id}/`, payload);
+      else              await api.post('/rbac/users/', payload);
+      setModalOpen(false); setSelectedUser(null);
       fetchUsers();
+      showToast(selectedUser ? 'User updated.' : 'User created.');
     } catch (err) {
-      console.error('User save error', err?.response?.data || err);
-      // store raw response payload so modal can show field-level errors
-      const payload = err?.response?.data || { error: err?.message || 'Save failed' };
-      setModalError(payload);
-    } finally {
-      setModalLoading(false);
-    }
+      setModalError(err?.response?.data || { error: err?.message || 'Save failed' });
+    } finally { setModalLoading(false); }
   };
 
+  /* Role stats — must be BEFORE any conditional return */
+  const roleCounts = useMemo(() => {
+    return users.reduce((acc, u) => { acc[u.role] = (acc[u.role]||0)+1; return acc; }, {});
+  }, [users]);
+
   if (user?.role !== 'ADMIN') {
-    return (
-      <Layout>
-        <div className="p-10">Access Denied</div>
-      </Layout>
-    );
+    return <Layout><EmptyState icon="default" title="Access Denied" description="You don't have permission to view this page." /></Layout>;
   }
 
   return (
     <Layout>
-      <div className="space-y-6">
+      <div className="page-container">
 
-        {/* HEADER */}
-        <div className="flex justify-between items-center">
-          <h1 className="text-3xl font-bold">Users</h1>
-
+        {/* ── Header ── */}
+        <div className="page-header">
+          <div>
+            <p className="section-label">Administration</p>
+            <h1 className="page-title mt-1">Users</h1>
+            <p className="page-subtitle">Manage user accounts, roles and department assignments.</p>
+          </div>
           <button
-            onClick={() => {
-              setSelectedUser(null);
-              setModalOpen(true);
-            }}
-            className="bg-blue-600 text-white px-4 py-2 rounded-lg flex gap-2"
+            type="button"
+            onClick={() => { setSelectedUser(null); setModalError(''); setModalOpen(true); }}
+            className="btn-primary"
           >
-            <Plus size={16} /> Create
+            <Plus size={15} />
+            Create User
           </button>
         </div>
 
-        {/* FILTERS */}
-        <div className="flex gap-3">
-          <input
-            placeholder="Search..."
-            className="border p-2 rounded w-full"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
+        {/* ── Toast ── */}
+        {toast && (
+          <div className={`alert ${toastType === 'error' ? 'alert-danger' : 'alert-success'}`}>
+            <CheckCircle2 size={14} className="shrink-0" />
+            {toast}
+            <button onClick={() => setToast('')} className="ml-auto"><X size={13}/></button>
+          </div>
+        )}
 
-          <select onChange={(e) => setRoleFilter(e.target.value)} className="border p-2">
-            <option value="ALL">Role</option>
-            {roles.map((r) => <option key={r}>{r}</option>)}
-          </select>
-
-          <select onChange={(e) => setDeptFilter(e.target.value)} className="border p-2">
-            <option value="ALL">Department</option>
-            {departmentsList.map((d) => (
-              <option key={d.code} value={d.code}>{d.name}</option>
-            ))}
-          </select>
+        {/* ── KPI stats ── */}
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="kpi-card">
+            <p className="kpi-label">Total Users</p>
+            <p className="kpi-value mt-2">{loading ? '—' : users.length}</p>
+          </div>
+          <div className="kpi-card">
+            <p className="kpi-label">Admins</p>
+            <p className="kpi-value mt-2 text-amber-600">{loading ? '—' : (roleCounts.ADMIN || 0)}</p>
+          </div>
+          <div className="kpi-card">
+            <p className="kpi-label">Team Leads</p>
+            <p className="kpi-value mt-2 text-violet-600">{loading ? '—' : (roleCounts.TEAMLEAD || 0)}</p>
+          </div>
+          <div className="kpi-card">
+            <p className="kpi-label">Employees</p>
+            <p className="kpi-value mt-2 text-emerald-600">{loading ? '—' : (roleCounts.EMPLOYEE || 0)}</p>
+          </div>
         </div>
 
-        {/* TABLE */}
-        <div className="bg-white shadow rounded-xl overflow-hidden">
-          <table className="w-full">
-            <thead className="bg-gray-100">
-              <tr>
-                <th className="p-3">Username</th>
-                <th>Email</th>
-                <th>Role</th>
-                <th>Department</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
+        {/* ── Filters ── */}
+        <div className="card">
+          <div className="p-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+            <div className="relative flex-1">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                placeholder="Search users…"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                className="form-input pl-9"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <Filter size={13} className="text-slate-400" />
+              <select
+                value={roleFilter}
+                onChange={e => setRoleFilter(e.target.value)}
+                className="form-select w-auto text-xs py-1.5"
+              >
+                <option value="ALL">All roles</option>
+                {['ADMIN','TEAMLEAD','EMPLOYEE'].map(r => <option key={r} value={r}>{r}</option>)}
+              </select>
+              <select
+                value={deptFilter}
+                onChange={e => setDeptFilter(e.target.value)}
+                className="form-select w-auto text-xs py-1.5"
+              >
+                <option value="ALL">All departments</option>
+                {departments.map(d => <option key={d.code} value={d.code}>{d.name || d.code}</option>)}
+              </select>
+              {(search || roleFilter !== 'ALL' || deptFilter !== 'ALL') && (
+                <button
+                  type="button"
+                  onClick={() => { setSearch(''); setRoleFilter('ALL'); setDeptFilter('ALL'); }}
+                  className="btn-ghost btn-sm text-slate-500"
+                >
+                  <X size={12} /> Clear
+                </button>
+              )}
+            </div>
+          </div>
 
-            <tbody>
-              {loading ? (
-                <tr><td colSpan="5" className="text-center p-6">Loading...</td></tr>
-              ) : filteredUsers.map((u) => (
-                <tr key={u.id} className="border-t">
-                  <td className="p-3">{u.username}</td>
-                  <td>{u.email}</td>
-
-                  <td>
-                    <span className={`px-2 py-1 rounded text-xs ${roleClasses[u.role]}`}>
-                      {u.role}
-                    </span>
-                  </td>
-
-                  <td>{u.department || 'Global'}</td>
-
-                  <td className="flex gap-2 p-3">
-                    <button
-                      onClick={() => {
-                        setSelectedUser(u);
-                        setModalOpen(true);
-                      }}
-                      className="bg-blue-500 text-white px-2 py-1 rounded"
-                    >
-                      <Edit3 size={14} />
-                    </button>
-
-                    <button
-                      onClick={() => setConfirmDelete(u)}
-                      className="bg-red-500 text-white px-2 py-1 rounded"
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </td>
+          {/* ── Table ── */}
+          <div className="overflow-x-auto border-t border-slate-100">
+            <table className="table-enterprise">
+              <thead>
+                <tr>
+                  <th>Username</th>
+                  <th>Email</th>
+                  <th>Name</th>
+                  <th>Role</th>
+                  <th>Department</th>
+                  <th className="text-right">Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {loading ? (
+                  [1,2,3,4,5].map(i => <SkeletonRow key={i} />)
+                ) : filteredUsers.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-10">
+                      <EmptyState icon="search" title="No users found" description="Try adjusting the search or filters." />
+                    </td>
+                  </tr>
+                ) : (
+                  filteredUsers.map(u => (
+                    <tr key={u.id}>
+                      <td>
+                        <div className="flex items-center gap-2">
+                          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs font-bold text-slate-600">
+                            {u.username?.charAt(0)?.toUpperCase()}
+                          </div>
+                          <span className="font-medium text-slate-900">{u.username}</span>
+                        </div>
+                      </td>
+                      <td className="text-sm text-slate-500">{u.email || '—'}</td>
+                      <td className="text-sm">
+                        {(u.first_name || u.last_name)
+                          ? `${u.first_name || ''} ${u.last_name || ''}`.trim()
+                          : '—'
+                        }
+                      </td>
+                      <td>
+                        <span className={`badge ${ROLE_CLS[u.role] || 'badge-slate'}`}>{u.role}</span>
+                      </td>
+                      <td className="text-sm text-slate-500">{u.department || 'Global'}</td>
+                      <td className="text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            type="button"
+                            onClick={() => { setSelectedUser(u); setModalError(''); setModalOpen(true); }}
+                            className="btn-icon-sm text-brand-500 hover:bg-brand-50 border border-slate-200"
+                            aria-label={`Edit ${u.username}`}
+                          >
+                            <Edit3 size={13} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDelete(u)}
+                            className="btn-icon-sm text-red-500 hover:bg-red-50 border border-slate-200"
+                            aria-label={`Delete ${u.username}`}
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Footer count */}
+          {!loading && (
+            <div className="border-t border-slate-100 px-4 py-2.5 text-xs text-slate-500">
+              Showing {filteredUsers.length} of {users.length} users
+            </div>
+          )}
         </div>
 
-        {/* MODAL */}
+        {/* ── Edit/Create modal ── */}
         {modalOpen && (
           <UserModal
             open={modalOpen}
             mode={selectedUser ? 'edit' : 'create'}
             initialData={selectedUser || {}}
-            roles={roles}
+            roles={['ADMIN','TEAMLEAD','EMPLOYEE']}
             departments={departments}
-            onClose={() => {
-              setModalOpen(false);
-              setSelectedUser(null);
-              setModalError('');
-            }}
+            onClose={() => { setModalOpen(false); setSelectedUser(null); setModalError(''); }}
             onSubmit={handleModalSubmit}
             loading={modalLoading}
             error={modalError}
           />
         )}
 
-        {/* DELETE */}
+        {/* ── Delete confirm modal ── */}
         {confirmDelete && (
-          <div className="fixed inset-0 flex items-center justify-center bg-black/40">
-            <div className="bg-white p-6 rounded-xl">
-              <p>Delete {confirmDelete.username}?</p>
-              <div className="flex gap-3 mt-4">
-                <button onClick={() => setConfirmDelete(null)}>Cancel</button>
-                <button onClick={handleDelete} className="text-red-600">
-                  Confirm
-                </button>
+          <div className="modal-backdrop" onClick={() => setConfirmDelete(null)}>
+            <div className="modal-panel max-w-md" onClick={e => e.stopPropagation()}>
+              <div className="modal-header">
+                <h3 className="text-base font-semibold text-slate-900">Delete User</h3>
+                <button onClick={() => setConfirmDelete(null)} className="btn-icon-sm"><X size={14}/></button>
+              </div>
+              <div className="modal-body">
+                <p className="text-sm text-slate-600">
+                  Are you sure you want to delete <strong className="text-slate-900">{confirmDelete.username}</strong>?
+                  This action cannot be undone.
+                </p>
+              </div>
+              <div className="modal-footer">
+                <button onClick={() => setConfirmDelete(null)} className="btn-secondary">Cancel</button>
+                <button onClick={handleDelete} className="btn-danger">Delete User</button>
               </div>
             </div>
           </div>
         )}
-
       </div>
     </Layout>
   );
