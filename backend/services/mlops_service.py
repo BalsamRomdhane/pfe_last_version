@@ -19,11 +19,31 @@ from django.utils import timezone as tz
 logger = logging.getLogger(__name__)
 
 # ── Jenkins config from env ───────────────────────────────────────────────────
-JENKINS_URL      = os.getenv('JENKINS_URL', 'http://jenkins:8080')
-JENKINS_USER     = os.getenv('JENKINS_USER', 'admin')
-JENKINS_TOKEN    = os.getenv('JENKINS_TOKEN', '')
-JENKINS_JOB_NAME = os.getenv('JENKINS_JOB_NAME', 'compliance-ml-pipeline')
-RETRAINING_THRESHOLD = int(os.getenv('MLOPS_RETRAINING_THRESHOLD', '10'))
+# NOTE: These module-level constants are kept for backward compatibility with
+# trigger_jenkins_pipeline(). All health-check functions re-read from os.getenv()
+# at call time so .env changes are picked up after a Daphne restart.
+_JENKINS_URL_DEFAULT      = 'http://localhost:8089'
+_JENKINS_USER_DEFAULT     = 'jenkins_admin'
+_JENKINS_TOKEN_DEFAULT    = ''
+_JENKINS_JOB_DEFAULT      = 'compliance-ml-pipeline'
+RETRAINING_THRESHOLD      = int(os.getenv('MLOPS_RETRAINING_THRESHOLD', '10'))
+
+
+def _jenkins_cfg():
+    """Return current Jenkins config from environment (re-read on every call)."""
+    return {
+        'url':   os.getenv('JENKINS_URL',      _JENKINS_URL_DEFAULT).rstrip('/'),
+        'user':  os.getenv('JENKINS_USER',     _JENKINS_USER_DEFAULT),
+        'token': os.getenv('JENKINS_TOKEN',    _JENKINS_TOKEN_DEFAULT),
+        'job':   os.getenv('JENKINS_JOB_NAME', _JENKINS_JOB_DEFAULT),
+    }
+
+
+# Backward-compat aliases used by trigger_jenkins_pipeline()
+def _get_jenkins_url():   return _jenkins_cfg()['url']
+def _get_jenkins_user():  return _jenkins_cfg()['user']
+def _get_jenkins_token(): return _jenkins_cfg()['token']
+def _get_jenkins_job():   return _jenkins_cfg()['job']
 
 
 # ── Jenkins Health Service ────────────────────────────────────────────────────
@@ -42,31 +62,33 @@ def get_jenkins_health() -> Dict[str, Any]:
     The 'local_training' flag is always True: the ML pipeline can run
     locally regardless of Jenkins availability.
     """
-    _url   = os.getenv('JENKINS_URL',      JENKINS_URL).rstrip('/')
-    _user  = os.getenv('JENKINS_USER',     JENKINS_USER)
-    _token = os.getenv('JENKINS_TOKEN',    JENKINS_TOKEN)
-    _job   = os.getenv('JENKINS_JOB_NAME', JENKINS_JOB_NAME)
+    cfg    = _jenkins_cfg()
+    _url   = cfg['url']
+    _user  = cfg['user']
+    _token = cfg['token']
+    _job   = cfg['job']
 
     base = {
-        'local_training': True,   # always available
+        'local_training': True,
         'checked_at': datetime.now(timezone.utc).isoformat(),
         'jenkins_url': _url if _token else None,
-        'job_name': _job if _token else None,
+        'job_name':    _job if _token else None,
     }
 
     # ── Case 1: token not set ─────────────────────────────────────────────
     if not _token.strip():
         return {
             **base,
-            'configured': False,
-            'reachable': False,
+            'configured':    False,
+            'reachable':     False,
             'authenticated': False,
-            'connected': False,
+            'connected':     False,
             'remote_trigger': False,
-            'version': None,
-            'status': 'not_configured',
+            'version':       None,
+            'status':        'not_configured',
             'message': (
                 'Remote Jenkins API is not configured. '
+                'Set JENKINS_TOKEN in backend/.env and restart the server. '
                 'Local model training remains available.'
             ),
         }
@@ -82,68 +104,63 @@ def get_jenkins_health() -> Dict[str, Any]:
     except requests.exceptions.ConnectionError:
         return {
             **base,
-            'configured': True,
-            'reachable': False,
+            'configured':    True,
+            'reachable':     False,
             'authenticated': False,
-            'connected': False,
+            'connected':     False,
             'remote_trigger': False,
-            'version': None,
-            'status': 'unreachable',
-            'message': (
-                'Unable to reach Jenkins. '
-                'Check server status or network connectivity.'
-            ),
+            'version':       None,
+            'status':        'unreachable',
+            'message':       f'Unable to reach Jenkins at {_url}. Check server status or network.',
         }
     except requests.exceptions.Timeout:
         return {
             **base,
-            'configured': True,
-            'reachable': False,
+            'configured':    True,
+            'reachable':     False,
             'authenticated': False,
-            'connected': False,
+            'connected':     False,
             'remote_trigger': False,
-            'version': None,
-            'status': 'unreachable',
-            'message': 'Jenkins did not respond within 5 seconds.',
+            'version':       None,
+            'status':        'unreachable',
+            'message':       f'Jenkins at {_url} did not respond within 5 seconds.',
         }
     except Exception as exc:
         return {
             **base,
-            'configured': True,
-            'reachable': False,
+            'configured':    True,
+            'reachable':     False,
             'authenticated': False,
-            'connected': False,
+            'connected':     False,
             'remote_trigger': False,
-            'version': None,
-            'status': 'error',
-            'message': f'Jenkins check failed: {exc}',
+            'version':       None,
+            'status':        'error',
+            'message':       f'Jenkins check failed: {exc}',
         }
 
     # ── Case 3: authentication check ─────────────────────────────────────
     if resp.status_code in (401, 403):
         return {
             **base,
-            'configured': True,
-            'reachable': True,
+            'configured':    True,
+            'reachable':     True,
             'authenticated': False,
-            'connected': False,
+            'connected':     False,
             'remote_trigger': False,
-            'version': None,
-            'status': 'auth_failed',
+            'version':       None,
+            'status':        'auth_failed',
             'message': (
-                'Unable to authenticate with Jenkins. '
-                'Verify JENKINS_USER and JENKINS_TOKEN.'
+                f'Jenkins responded but rejected credentials for user "{_user}". '
+                'Verify JENKINS_USER and JENKINS_TOKEN in backend/.env.'
             ),
         }
 
-    # Extract Jenkins version from response header (present on all Jenkins responses)
     version = resp.headers.get('X-Jenkins', None)
 
     # ── Case 4: job existence check ───────────────────────────────────────
-    job_url = f'{_url}/job/{_job}/api/json'
     try:
         job_resp = requests.get(
-            job_url,
+            f'{_url}/job/{_job}/api/json',
             auth=(_user, _token),
             timeout=5,
             headers={'Accept': 'application/json'},
@@ -155,35 +172,82 @@ def get_jenkins_health() -> Dict[str, Any]:
     if not job_exists:
         return {
             **base,
-            'configured': True,
-            'reachable': True,
+            'configured':    True,
+            'reachable':     True,
             'authenticated': True,
-            'connected': False,
+            'connected':     False,
             'remote_trigger': False,
-            'version': version,
-            'status': 'job_not_found',
+            'version':       version,
+            'status':        'job_not_found',
             'message': (
-                f'Connected to Jenkins, but the configured pipeline job '
-                f'"{_job}" was not found.'
+                f'Connected to Jenkins v{version or "?"} at {_url}, '
+                f'but pipeline job "{_job}" was not found. '
+                'Check JENKINS_JOB_NAME in backend/.env.'
             ),
         }
 
     # ── Case 5: fully connected ───────────────────────────────────────────
     return {
         **base,
-        'configured': True,
-        'reachable': True,
+        'configured':    True,
+        'reachable':     True,
         'authenticated': True,
-        'connected': True,
+        'connected':     True,
         'remote_trigger': True,
-        'version': version,
-        'status': 'connected',
-        'message': f'Jenkins connected · {_url} · job: {_job}',
+        'version':       version,
+        'status':        'connected',
+        'message':       f'Jenkins connected — {_url} — job: {_job} — v{version or "?"}',
     }
 
 
 # ── Document/sample counting ─────────────────────────────────────────────────
-def count_new_documents(standard: str) -> Dict[str, Any]:
+def get_jenkins_builds(limit: int = 10) -> Dict[str, Any]:
+    """Fetch recent builds from Jenkins for the configured job."""
+    cfg = _jenkins_cfg()
+    _url, _user, _token, _job = cfg['url'], cfg['user'], cfg['token'], cfg['job']
+
+    if not _token:
+        return {'builds': [], 'error': 'Jenkins not configured'}
+
+    try:
+        resp = requests.get(
+            f'{_url}/job/{_job}/api/json'
+            f'?tree=builds[number,status,result,timestamp,duration,url,displayName]{{,{limit}}}',
+            auth=(_user, _token),
+            timeout=10,
+            headers={'Accept': 'application/json'},
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            return {'builds': data.get('builds', []), 'job': _job, 'url': _url}
+        return {'builds': [], 'error': f'HTTP {resp.status_code}'}
+    except Exception as exc:
+        return {'builds': [], 'error': str(exc)}
+
+
+def get_jenkins_last_build() -> Dict[str, Any]:
+    """Fetch the last build info from Jenkins."""
+    cfg = _jenkins_cfg()
+    _url, _user, _token, _job = cfg['url'], cfg['user'], cfg['token'], cfg['job']
+
+    if not _token:
+        return {'error': 'Jenkins not configured'}
+
+    try:
+        resp = requests.get(
+            f'{_url}/job/{_job}/lastBuild/api/json',
+            auth=(_user, _token),
+            timeout=10,
+            headers={'Accept': 'application/json'},
+        )
+        if resp.status_code == 200:
+            return resp.json()
+        return {'error': f'HTTP {resp.status_code}'}
+    except Exception as exc:
+        return {'error': str(exc)}
+
+
+
     """Return count of labeled RuleTrainingSamples added since last training.
 
     This is the authoritative "new docs" metric because the ML pipeline trains
@@ -309,9 +373,15 @@ def trigger_jenkins_pipeline(standard: str, doc_info: Dict[str, Any]) -> Dict[st
     """POST to Jenkins to trigger the ML pipeline job."""
     from api.models import TrainingJob, MLOpsConfig
 
-    if not JENKINS_TOKEN:
+    cfg = _jenkins_cfg()
+    _url   = cfg['url']
+    _user  = cfg['user']
+    _token = cfg['token']
+    _job   = cfg['job']
+
+    if not _token:
         logger.warning('JENKINS_TOKEN not configured — skipping Jenkins trigger.')
-        return {'triggered': False, 'reason': 'JENKINS_TOKEN not configured'}
+        return {'triggered': False, 'reason': 'JENKINS_TOKEN not configured in backend/.env'}
 
     job = TrainingJob.objects.create(
         status='pending',
@@ -322,19 +392,19 @@ def trigger_jenkins_pipeline(standard: str, doc_info: Dict[str, Any]) -> Dict[st
     )
 
     params = {
-        'STANDARD': standard,
-        'DOCUMENT_COUNT': str(doc_info.get('total_documents', 0)),
-        'NEW_DOCS': str(doc_info.get('new_documents', 0)),
-        'JOB_ID': str(job.id),
-        'API_URL': os.getenv('DJANGO_API_URL', 'http://backend:8000'),
+        'STANDARD':        standard,
+        'DOCUMENT_COUNT':  str(doc_info.get('total_documents', 0)),
+        'NEW_DOCS':        str(doc_info.get('new_documents', 0)),
+        'JOB_ID':          str(job.id),
+        'API_URL':         os.getenv('DJANGO_API_URL', 'http://localhost:8000'),
     }
 
-    url = f"{JENKINS_URL}/job/{JENKINS_JOB_NAME}/buildWithParameters"
+    trigger_url = f'{_url}/job/{_job}/buildWithParameters'
 
     try:
         response = requests.post(
-            url,
-            auth=(JENKINS_USER, JENKINS_TOKEN),
+            trigger_url,
+            auth=(_user, _token),
             params=params,
             timeout=15,
         )
@@ -352,10 +422,11 @@ def trigger_jenkins_pipeline(standard: str, doc_info: Dict[str, Any]) -> Dict[st
 
         logger.info('Jenkins pipeline triggered for %s — job #%s', standard, job.id)
         return {
-            'triggered': True,
-            'job_id': job.id,
-            'build_url': build_url,
-            'standard': standard,
+            'triggered':   True,
+            'job_id':      job.id,
+            'build_url':   build_url,
+            'standard':    standard,
+            'jenkins_url': _url,
         }
 
     except requests.RequestException as e:
