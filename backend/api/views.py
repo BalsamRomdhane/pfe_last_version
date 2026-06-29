@@ -3114,9 +3114,9 @@ def compliance_chat_stream_api(request):
         from services.llm_service import stream_compliance_answer
         yield from stream_compliance_answer(
             question=question,
-            evidences=evidences[:top_k],
+            context_rules=[],
+            context_evidence=evidences[:top_k],
             standard=standard,
-            user=_user,
         )
 
     response = StreamingHttpResponse(
