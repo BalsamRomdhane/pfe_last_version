@@ -11,7 +11,6 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-import numpy as np
 import requests
 from django.conf import settings
 from django.utils import timezone as tz
@@ -361,7 +360,7 @@ def compute_drift_score(standard: str) -> Dict[str, Any]:
         }
 
     except Exception as e:
-        logger.error('Drift computation failed: %s', e)
+        logger.exception('Drift computation failed')
         return {
             'drift_score': 0.0,
             'status': 'error',
@@ -435,7 +434,7 @@ def trigger_jenkins_pipeline(standard: str, doc_info: Dict[str, Any]) -> Dict[st
         job.log_output = str(e)
         job.end_time = tz.now()
         job.save(update_fields=['status', 'log_output', 'end_time'])
-        logger.error('Jenkins trigger failed: %s', e)
+        logger.exception('Jenkins trigger failed')
         return {'triggered': False, 'reason': str(e), 'job_id': job.id}
 
 

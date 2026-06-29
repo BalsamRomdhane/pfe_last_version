@@ -40,7 +40,7 @@ def create_training_sample_on_validation(sender, instance, created, update_field
         rule = instance.rule
         
         if not document or not rule:
-            logger.warning(f"Validation {instance.id} missing document or rule")
+            logger.warning('Validation %s missing document or rule', instance.id)
             return
         
         # Log incoming validation
@@ -58,8 +58,8 @@ def create_training_sample_on_validation(sender, instance, created, update_field
         try:
             if document.file:
                 document_text = extract_document_text(document)[:2000]  # Limit to 2000 chars
-        except Exception as e:
-            logger.warning(f"Could not extract text from document {document.id}: {e}")
+        except Exception as exc:
+            logger.warning('Could not extract text from document %s: %s', document.id, exc)
         
         # Determine the resolved document status for training and approval
         status_source = document.final_decision or document.status
@@ -74,8 +74,12 @@ def create_training_sample_on_validation(sender, instance, created, update_field
         feature_vector = build_validation_feature_vector(document)
         
         # VALIDATION: total_rules must equal valid + invalid
-        assert metrics['total_rules'] == metrics['valid_rules_count'] + metrics['invalid_rules_count'], \
-            'Metrics consistency error: total_rules != valid + invalid'
+        if metrics['total_rules'] != metrics['valid_rules_count'] + metrics['invalid_rules_count']:
+            raise ValueError(
+                f"Metrics consistency error for document {document.id}: "
+                f"total_rules={metrics['total_rules']} != "
+                f"valid={metrics['valid_rules_count']} + invalid={metrics['invalid_rules_count']}"
+            )
         
         defaults = {
             'norm_id': document.norme_id,
@@ -121,8 +125,8 @@ def create_training_sample_on_validation(sender, instance, created, update_field
         # Keep the dedicated document-level dataset synchronized as well.
         try:
             create_document_training_sample(document)
-        except Exception as e:
-            logger.warning(f"Failed to refresh document training sample for document {document.id}: {e}")
+        except Exception as exc:
+            logger.warning('Failed to refresh document training sample for document %s: %s', document.id, exc)
 
         # Also create or update a RuleTrainingSample for this validation (one per document+rule)
         try:
@@ -143,8 +147,8 @@ def create_training_sample_on_validation(sender, instance, created, update_field
                     'final_document_decision': document.final_decision or document.status,
                 }
             )
-        except Exception as e:
-            logger.error(f"Failed to create/update RuleTrainingSample for Validation {instance.id}: {e}")
+        except Exception as exc:
+            logger.error('Failed to create/update RuleTrainingSample for Validation %s: %s', instance.id, exc)
 
         action = "Created" if created_sample else "Updated"
         # Determine what changed (if updated)
@@ -180,8 +184,8 @@ def create_training_sample_on_validation(sender, instance, created, update_field
         # Trigger dataset export after X validations (optional optimization)
         _check_trigger_dataset_export(document.norme)
         
-    except Exception as e:
-        logger.error(f"Error creating TrainingSample for Validation {instance.id}: {e}")
+    except Exception as exc:
+        logger.error('Error creating TrainingSample for Validation %s: %s', instance.id, exc)
         raise
 
 
@@ -192,9 +196,9 @@ def cleanup_training_sample_on_validation_delete(sender, instance, **kwargs):
     Current behavior: log only (don't delete sample to preserve history).
     """
     try:
-        logger.info(f"Validation {instance.id} deleted (TrainingSample preserved for history)")
-    except Exception as e:
-        logger.error(f"Error handling Validation deletion: {e}")
+        logger.info('Validation %s deleted (TrainingSample preserved for history)', instance.id)
+    except Exception as exc:
+        logger.error('Error handling Validation deletion: %s', exc)
 
 
 def _check_trigger_dataset_export(norme):
@@ -216,11 +220,10 @@ def _check_trigger_dataset_export(norme):
     
     # Trigger export every 10 validations (can be configured)
     if recent_validations % 10 == 0 and recent_validations > 0:
-        logger.info(f"Triggering dataset export for {norme.name} after {recent_validations} validations")
-        # Import here to avoid circular dependency
+        logger.info('Triggering dataset export for %s after %d validations', norme.name, recent_validations)
         from .utils_dataset import export_datasets_for_norm
         try:
             export_datasets_for_norm(norme)
-            logger.info(f"Dataset export completed for {norme.name}")
-        except Exception as e:
-            logger.error(f"Dataset export failed for {norme.name}: {e}")
+            logger.info('Dataset export completed for %s', norme.name)
+        except Exception as exc:
+            logger.error('Dataset export failed for %s: %s', norme.name, exc)

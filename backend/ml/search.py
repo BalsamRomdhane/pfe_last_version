@@ -1,11 +1,12 @@
 import os
 import re
+import pickle
+from datetime import timezone
 
 import numpy as np
+from django.utils import timezone as tz
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-from datetime import datetime
-import pickle
 
 try:
     import faiss
@@ -302,7 +303,7 @@ def build_and_persist_evidence_index(standard=None, norme_id=None, model_name=EM
             faiss.write_index(index, index_path)
             indexed = int(index.ntotal)
             meta['indexed_evidences'] = indexed
-            meta['last_trained'] = datetime.utcnow().isoformat() + 'Z'
+            meta['last_trained'] = tz.now().isoformat()
             # write metadata
             with open(meta_path, 'w', encoding='utf-8') as fh:
                 json.dump(meta, fh, indent=2)
@@ -312,7 +313,7 @@ def build_and_persist_evidence_index(standard=None, norme_id=None, model_name=EM
     else:
         # FAISS not available: save metadata and TF-IDF fallback artifacts if present
         meta['indexed_evidences'] = len(ids)
-        meta['last_trained'] = datetime.utcnow().isoformat() + 'Z'
+        meta['last_trained'] = tz.now().isoformat()
         with open(meta_path, 'w', encoding='utf-8') as fh:
             json.dump(meta, fh, indent=2)
         return meta

@@ -51,7 +51,7 @@ try:
     from ml.search import SemanticSearchEngine
     from ml.search import build_and_persist_evidence_index, load_evidence_index_metadata
 except Exception as e:
-    print(f"Warning: Could not import ML search modules: {e}")
+    logger.warning('Could not import ML search modules: %s', e)
     SemanticSearchEngine = None
     build_and_persist_evidence_index = None
     load_evidence_index_metadata = None
@@ -1850,7 +1850,7 @@ def ml_test_document_api(request):
         })
 
     except Exception as e:
-        logger.error("[ML_TEST] FATAL: %s", e, exc_info=True)
+        logger.exception('[ML_TEST] FATAL: %s', e)
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -1939,7 +1939,7 @@ def ml_test_evidence_api(request):
         })
 
     except Exception as e:
-        logger.error("[ML_TEST_EV] FATAL: %s", e, exc_info=True)
+        logger.exception('[ML_TEST_EV] FATAL: %s', e)
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 

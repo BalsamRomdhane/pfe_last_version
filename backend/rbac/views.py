@@ -1,27 +1,25 @@
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.generics import ListCreateAPIView
-from rest_framework.filters import SearchFilter, OrderingFilter
-from rest_framework.pagination import PageNumberPagination
+import logging
+
 from django.contrib.auth.models import User
 from django.db import transaction
 from django.db.models import Q
+from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from authentication.authentication import KeycloakAuthentication
-from authentication.permissions import IsAdmin, DepartmentAccess
+from authentication.permissions import IsAdmin
 from authentication.serializers import (
-    UserCreateSerializer, 
-    UserUpdateSerializer,
-    UserDetailSerializer,
-    UserProfileSerializer,
     DepartmentSerializer,
-    RoleSerializer
+    UserCreateSerializer,
+    UserUpdateSerializer,
 )
 from authentication.services import KeycloakService
-from .models import UserProfile, Role, Department, AuditLog
+from .models import AuditLog, Department, Role, UserProfile
 from .signals import log_user_action
+
+logger = logging.getLogger(__name__)
 
 
 class UserListCreateView(APIView):
@@ -182,8 +180,8 @@ class UserListCreateView(APIView):
                         last_name=last_name
                     )
                 except Exception as kc_error:
-                    # Log but don't fail - user can still work with Django
-                    print(f'Keycloak user creation warning: {kc_error}')
+                    # Non-fatal — user is created in Django; Keycloak sync is best-effort
+                    logger.warning('Keycloak user creation warning: %s', kc_error)
 
                 # Create UserProfile in Django
                 user_profile = UserProfile.objects.create(
@@ -312,8 +310,8 @@ class UserDetailView(APIView):
                             first_name=serializer.validated_data.get('first_name'),
                             last_name=serializer.validated_data.get('last_name')
                         )
-                    except Exception as e:
-                        print(f'Keycloak user update warning: {e}')
+                    except Exception as kc_err:
+                        logger.warning('Keycloak user update warning: %s', kc_err)
 
                 # Update profile fields
                 if 'role' in serializer.validated_data:
@@ -372,8 +370,8 @@ class UserDetailView(APIView):
                     keycloak_service = KeycloakService()
                     try:
                         keycloak_service.delete_user_from_keycloak(profile.keycloak_id)
-                    except Exception as e:
-                        print(f'Keycloak deletion warning: {e}')
+                    except Exception as kc_err:
+                        logger.warning('Keycloak deletion warning: %s', kc_err)
 
                 # Delete Django user (cascade deletes UserProfile)
                 username = user.username

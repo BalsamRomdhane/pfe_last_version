@@ -1,15 +1,17 @@
-import datetime
 import json
-import requests
+import logging
+import time
+
 import jwt
-from datetime import timedelta
+import requests
 from django.conf import settings
-from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
+from django.contrib.auth.models import User
 from django.core.mail import send_mail
-from django.utils import timezone
 from jwt import PyJWKClient
 from rbac.models import UserProfile
+
+logger = logging.getLogger(__name__)
 
 
 def _decode_verified_token(token):
@@ -199,16 +201,17 @@ class KeycloakService:
         return decoded
 
     def send_first_login_email(self, user, token):
-        reset_link = f'http://localhost:3000/reset-password?token={token}'
+        frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:3000')
+        reset_link = f'{frontend_url}/reset-password?token={token}'
         subject = 'Première connexion : réinitialisation de votre mot de passe'
         message = (
             f'Bonjour {user.first_name or user.last_name or user.username},\n\n'
-            'Nous avons détecté que c\'est votre première connexion. \n'
+            "Nous avons détecté que c'est votre première connexion.\n"
             'Veuillez cliquer sur le lien suivant pour définir un nouveau mot de passe :\n\n'
             f'{reset_link}\n\n'
-            'Ce lien expire dans 90 minutes. Si vous n\'avez pas demandé cette opération, ignorez ce message.'
+            "Ce lien expire dans 90 minutes. Si vous n'avez pas demandé cette opération, ignorez ce message."
         )
-        email_from = settings.DEFAULT_FROM_EMAIL if hasattr(settings, 'DEFAULT_FROM_EMAIL') else 'no-reply@example.com'
+        email_from = getattr(settings, 'DEFAULT_FROM_EMAIL', 'no-reply@example.com')
         send_mail(subject, message, email_from, [user.email], fail_silently=False)
 
     def get_user_profile(self, access_token):
@@ -293,8 +296,7 @@ class KeycloakService:
         try:
             admin_token = self.get_keycloak_admin_token()
         except Exception as e:
-            # If Keycloak admin API fails, continue anyway (user can be created in Django only)
-            print(f'Warning: Could not create user in Keycloak: {e}')
+            logger.warning('Could not create user in Keycloak: %s', e)
             return None
 
         url = f'{self.server_url}/admin/realms/{self.realm}/users'
@@ -333,7 +335,7 @@ class KeycloakService:
         try:
             admin_token = self.get_keycloak_admin_token()
         except Exception as e:
-            print(f'Warning: Could not delete user from Keycloak: {e}')
+            logger.warning('Could not delete user from Keycloak: %s', e)
             return False
 
         url = f'{self.server_url}/admin/realms/{self.realm}/users/{keycloak_id}'
@@ -347,7 +349,7 @@ class KeycloakService:
         try:
             admin_token = self.get_keycloak_admin_token()
         except Exception as e:
-            print(f'Warning: Could not update password in Keycloak: {e}')
+            logger.warning('Could not update password in Keycloak: %s', e)
             return False
 
         url = f'{self.server_url}/admin/realms/{self.realm}/users/{keycloak_id}/reset-password'
@@ -370,7 +372,7 @@ class KeycloakService:
         try:
             admin_token = self.get_keycloak_admin_token()
         except Exception as e:
-            print(f'Warning: Could not update user in Keycloak: {e}')
+            logger.warning('Could not update user in Keycloak: %s', e)
             return False
 
         payload = {}
