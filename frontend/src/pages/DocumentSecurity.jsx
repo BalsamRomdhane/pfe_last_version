@@ -563,7 +563,7 @@ function AnalysisTab() {
                   <option value="">{docsLoading ? 'Loading documents…' : '— Select a document —'}</option>
                   {docs.map(d => (
                     <option key={d.id} value={d.id}>
-                      #{d.id} — {d.title || 'Untitled'} ({d.status || '?'}) · {d.employee_username || ''}
+                      #{d.id} — {d.label} ({d.status || '?'}) · {d.employee_username || ''}
                     </option>
                   ))}
                 </select>

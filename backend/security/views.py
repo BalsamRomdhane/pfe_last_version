@@ -268,10 +268,25 @@ def documents_list_for_security(request):
         qs = Document.objects.filter(employee_username=user.username)
 
     qs = qs.order_by('-created_at').values(
-        'id', 'title', 'status', 'employee_username', 'created_at'
+        'id', 'status', 'employee_username', 'employee_department', 'created_at', 'file'
     )[:200]
 
-    return Response(list(qs))
+    # Build display label from file name + norme (file is a FieldFile path string)
+    results = []
+    for doc in qs:
+        file_path = doc.get('file') or ''
+        # file path is like "documents/myfile.pdf" — extract basename
+        filename = file_path.split('/')[-1].split('\\')[-1] if file_path else ''
+        results.append({
+            'id':                 doc['id'],
+            'label':              filename or f'Document #{doc["id"]}',
+            'status':             doc.get('status') or '',
+            'employee_username':  doc.get('employee_username') or '',
+            'employee_department': doc.get('employee_department') or '',
+            'created_at':         doc.get('created_at'),
+        })
+
+    return Response(results)
 
 
 # ── Scan uploaded file (no DB save) ──────────────────────────────────────────
