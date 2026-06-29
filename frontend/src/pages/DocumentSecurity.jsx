@@ -275,13 +275,210 @@ function DashboardTab() {
   );
 }
 
+/* ── Shared analysis result renderer ─────────────────────────────── */
+function AnalysisResult({ a }) {
+  if (!a) return null;
+  const rCfg = RISK_CFG[a.risk_level]             || RISK_CFG.LOW;
+  const cCfg = CONF_CFG[a.confidentiality_level]  || CONF_CFG.PUBLIC;
+  const gCfg = GDPR_CFG[a.gdpr_status]            || GDPR_CFG.UNKNOWN;
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-5">
+      {/* Score rings + badges */}
+      <div className="card card-body">
+        <div className="flex flex-wrap items-center justify-between gap-6">
+          <div className="flex items-center gap-8">
+            <ScoreRing value={a.confidentiality_score} color={cCfg.ring} label="Confidentiality" />
+            <ScoreRing
+              value={a.risk_score}
+              color={a.risk_score > 60 ? '#ef4444' : a.risk_score > 30 ? '#f59e0b' : '#10b981'}
+              label="Risk Score"
+            />
+          </div>
+          <div className="flex flex-wrap gap-3 items-center">
+            <div className="flex flex-col items-center gap-1">
+              <span className="text-xs text-slate-400 uppercase tracking-wide">Classification</span>
+              <span className={`badge ${cCfg.badge} text-sm px-3 py-1`}>{cCfg.label}</span>
+            </div>
+            <div className="flex flex-col items-center gap-1">
+              <span className="text-xs text-slate-400 uppercase tracking-wide">Risk Level</span>
+              <span className={`badge ${rCfg.badge} text-sm px-3 py-1`}>{rCfg.label}</span>
+            </div>
+            <div className="flex flex-col items-center gap-1">
+              <span className="text-xs text-slate-400 uppercase tracking-wide">GDPR</span>
+              <span className={`badge ${gCfg.badge} text-sm px-3 py-1`}>{gCfg.label}</span>
+            </div>
+            {a.has_secrets && <span className="badge badge-red text-xs">🔑 Secrets Detected</span>}
+            {a.is_high_risk && <span className="badge badge-purple text-xs">⚠ High Risk</span>}
+          </div>
+          <div className="text-xs text-slate-400 space-y-0.5">
+            {a.filename && <p>File: <span className="text-slate-600">{a.filename}</span></p>}
+            {a.file_size_kb && <p>Size: <span className="text-slate-600">{a.file_size_kb} KB</span></p>}
+            {a.analysis_date && <p>Analysed: <span className="text-slate-600">{fmt(a.analysis_date)}</span></p>}
+            <p>Version: <span className="text-slate-600">{a.analysis_version}</span></p>
+          </div>
+        </div>
+        {(a.score_explanation || []).length > 0 && (
+          <div className="mt-4 pt-4 border-t border-slate-100">
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Score Breakdown</p>
+            <ul className="space-y-1">
+              {a.score_explanation.map((line, i) => (
+                <li key={i} className="text-xs text-slate-600 flex items-start gap-1.5">
+                  <span className="text-slate-300 mt-0.5">•</span>{line}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+
+      {/* PII */}
+      <Collapsible title="PII Detected" icon={User} badge={a.pii_count}>
+        {a.pii_count === 0
+          ? <p className="text-sm text-slate-400">No PII detected.</p>
+          : (
+            <div className="overflow-x-auto">
+              <table className="table-enterprise">
+                <thead><tr><th>Type</th><th>Value (redacted)</th><th>Context</th></tr></thead>
+                <tbody>
+                  {(a.pii_details || []).map((d, i) => (
+                    <tr key={i}>
+                      <td><span className="badge badge-blue text-xs">{d.type}</span></td>
+                      <td className="font-mono text-xs text-slate-500">{d.value}</td>
+                      <td className="text-xs text-slate-400 max-w-xs truncate-2">{d.context}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+      </Collapsible>
+
+      {/* Secrets */}
+      <Collapsible title="Secrets & Credentials" icon={Key} badge={a.secret_count}>
+        {a.secret_count === 0
+          ? <p className="text-sm text-slate-400">No secrets or credentials detected.</p>
+          : (
+            <div className="overflow-x-auto">
+              <table className="table-enterprise">
+                <thead><tr><th>Type</th><th>Value (redacted)</th><th>Confidence</th><th>Context</th></tr></thead>
+                <tbody>
+                  {(a.secret_details || []).map((d, i) => (
+                    <tr key={i}>
+                      <td><span className="badge badge-red text-xs">{d.type}</span></td>
+                      <td className="font-mono text-xs text-slate-500">{d.value}</td>
+                      <td className="tabular-nums text-xs">{d.confidence != null ? `${(d.confidence * 100).toFixed(0)}%` : '—'}</td>
+                      <td className="text-xs text-slate-400 max-w-xs truncate-2">{d.context}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+      </Collapsible>
+
+      {/* Metadata */}
+      <Collapsible title="Document Metadata" icon={FileText} badge={`risk: ${a.metadata_risk}`}>
+        {!a.metadata_details || Object.keys(a.metadata_details).length === 0
+          ? <p className="text-sm text-slate-400">No metadata extracted.</p>
+          : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {Object.entries(a.metadata_details).map(([k, v]) => {
+                if (v == null || v === false || (Array.isArray(v) && v.length === 0)) return null;
+                return (
+                  <div key={k} className="flex flex-col gap-0.5">
+                    <span className="text-2xs font-semibold uppercase tracking-wide text-slate-400">{k.replace(/_/g, ' ')}</span>
+                    <span className="text-sm text-slate-700 break-words">{Array.isArray(v) ? v.join(', ') : String(v)}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+      </Collapsible>
+
+      {/* GDPR */}
+      <Collapsible title="GDPR / RGPD Compliance" icon={ShieldCheck}>
+        <div className="space-y-3">
+          <div className="flex flex-wrap gap-3">
+            {[['PII present', a.gdpr_has_pii], ['Sensitive data', a.gdpr_has_sensitive], ['Financial data', a.gdpr_has_financial]].map(([lbl, flag]) => (
+              <div key={lbl} className="flex items-center gap-2 text-sm">
+                {flag ? <XCircle size={14} className="text-red-500" /> : <CheckCircle2 size={14} className="text-emerald-500" />}
+                {lbl}
+              </div>
+            ))}
+          </div>
+          {a.gdpr_compliance_summary && <div className="alert-info text-sm">{a.gdpr_compliance_summary}</div>}
+          {(a.gdpr_issues || []).length > 0 && (
+            <ul className="space-y-1 mt-2">
+              {a.gdpr_issues.map((issue, i) => (
+                <li key={i} className="text-sm text-red-600 flex items-start gap-1.5">
+                  <AlertCircle size={13} className="mt-0.5 shrink-0" />{issue}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </Collapsible>
+
+      {/* Recommendations */}
+      <Collapsible title="AI Recommendations" icon={Activity} badge={(a.recommendations || []).length}>
+        {(a.recommendations || []).length === 0
+          ? <p className="text-sm text-slate-400">No recommendations generated.</p>
+          : (
+            <div className="space-y-3">
+              {a.recommendations.map((r, i) => {
+                const pCfg = PRIO_CFG[r.priority] || PRIO_CFG.LOW;
+                return (
+                  <div key={i} className="border border-slate-100 rounded-xl p-4 hover:bg-slate-50/50 transition-colors">
+                    <div className="flex items-start justify-between gap-3 mb-1.5">
+                      <p className={`text-sm font-semibold ${pCfg.color}`}>{r.title}</p>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span className={`badge ${pCfg.badge} text-xs`}>{r.priority}</span>
+                        {r.category && <span className="badge badge-slate text-xs">{r.category}</span>}
+                      </div>
+                    </div>
+                    <p className="text-xs text-slate-500 mb-2">{r.description}</p>
+                    {r.action && <p className="text-xs font-medium text-slate-700"><span className="text-slate-400">Action: </span>{r.action}</p>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+      </Collapsible>
+    </motion.div>
+  );
+}
+
 /* ── Document Analysis tab ───────────────────────────────────────── */
 function AnalysisTab() {
-  const [docId, setDocId]     = useState('');
-  const [analysis, setAnal]   = useState(null);
-  const [loading, setLoad]    = useState(false);
-  const [reloading, setReload]= useState(false);
-  const [error, setError]     = useState(null);
+  // mode: 'existing' | 'upload'
+  const [mode, setMode]         = useState('existing');
+
+  // --- existing doc state ---
+  const [docs, setDocs]         = useState([]);
+  const [docsLoading, setDL]    = useState(false);
+  const [docId, setDocId]       = useState('');
+  const [analysis, setAnal]     = useState(null);
+  const [loading, setLoad]      = useState(false);
+  const [reloading, setReload]  = useState(false);
+  const [error, setError]       = useState(null);
+
+  // --- upload state ---
+  const [file, setFile]         = useState(null);
+  const [uploadAnal, setUAnal]  = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadErr, setUploadErr] = useState(null);
+  const [dragOver, setDragOver] = useState(false);
+
+  // Load document list for dropdown
+  useEffect(() => {
+    if (mode !== 'existing') return;
+    setDL(true);
+    api.get('/security/documents/list/')
+      .then(r => setDocs(r.data || []))
+      .catch(() => setDocs([]))
+      .finally(() => setDL(false));
+  }, [mode]);
 
   const fetchAnalysis = useCallback(async (id) => {
     if (!id) return;
@@ -290,7 +487,7 @@ function AnalysisTab() {
       const res = await api.get(`/security/documents/${id}/analysis/`);
       setAnal(res.data);
     } catch (e) {
-      setError(e?.response?.data?.error || 'No analysis found. Use Reanalyze to run one.');
+      setError(e?.response?.data?.error || 'No analysis found. Click Reanalyze to run one.');
     } finally { setLoad(false); }
   }, []);
 
@@ -305,226 +502,182 @@ function AnalysisTab() {
     } finally { setReload(false); }
   };
 
-  const a = analysis;
-  const rCfg = a ? (RISK_CFG[a.risk_level] || RISK_CFG.LOW) : null;
-  const cCfg = a ? (CONF_CFG[a.confidentiality_level] || CONF_CFG.PUBLIC) : null;
-  const gCfg = a ? (GDPR_CFG[a.gdpr_status] || GDPR_CFG.UNKNOWN) : null;
+  const handleUploadScan = async () => {
+    if (!file) return;
+    setUploading(true); setUploadErr(null); setUAnal(null);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await api.post('/security/scan/', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      setUAnal(res.data);
+    } catch (e) {
+      setUploadErr(e?.response?.data?.error || 'Scan failed. Check the file format.');
+    } finally { setUploading(false); }
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault(); setDragOver(false);
+    const dropped = e.dataTransfer.files[0];
+    if (dropped) { setFile(dropped); setUAnal(null); setUploadErr(null); }
+  };
 
   return (
     <div className="space-y-5">
-      {/* Search bar */}
+      {/* Mode toggle */}
       <div className="card card-body">
-        <p className="form-label">Document ID</p>
-        <div className="flex gap-3">
-          <input
-            type="number" min="1"
-            className="form-input max-w-xs"
-            placeholder="e.g. 42"
-            value={docId}
-            onChange={e => setDocId(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && fetchAnalysis(docId)}
-          />
+        <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-1 w-fit mb-5">
           <button
             type="button"
-            className="btn-primary flex items-center gap-2"
-            onClick={() => fetchAnalysis(docId)}
-            disabled={!docId || loading}
+            onClick={() => { setMode('existing'); setAnal(null); setError(null); }}
+            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
+              mode === 'existing' ? 'bg-white shadow text-slate-900' : 'text-slate-500 hover:text-slate-700'
+            }`}
           >
-            <Search size={15} /> {loading ? 'Loading…' : 'Load Analysis'}
+            <Database size={14} /> Existing Document
           </button>
           <button
             type="button"
-            className="btn-secondary flex items-center gap-2"
-            onClick={reanalyze}
-            disabled={!docId || reloading}
+            onClick={() => { setMode('upload'); setUAnal(null); setUploadErr(null); }}
+            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
+              mode === 'upload' ? 'bg-white shadow text-slate-900' : 'text-slate-500 hover:text-slate-700'
+            }`}
           >
-            <RefreshCw size={15} className={reloading ? 'animate-spin' : ''} />
-            {reloading ? 'Running…' : 'Reanalyze'}
+            <FileText size={14} /> Upload & Scan
           </button>
         </div>
-        {error && <p className="form-error mt-2">{error}</p>}
+
+        {/* ── EXISTING DOCUMENT MODE ── */}
+        {mode === 'existing' && (
+          <div className="space-y-3">
+            <p className="form-label">Select Document</p>
+            <div className="flex flex-wrap gap-3 items-start">
+              <div className="relative min-w-[280px] flex-1 max-w-md">
+                <select
+                  className="form-select w-full"
+                  value={docId}
+                  onChange={e => { setDocId(e.target.value); setAnal(null); setError(null); }}
+                  disabled={docsLoading}
+                >
+                  <option value="">{docsLoading ? 'Loading documents…' : '— Select a document —'}</option>
+                  {docs.map(d => (
+                    <option key={d.id} value={d.id}>
+                      #{d.id} — {d.title || 'Untitled'} ({d.status || '?'}) · {d.employee_username || ''}
+                    </option>
+                  ))}
+                </select>
+                {docsLoading && (
+                  <div className="absolute right-8 top-1/2 -translate-y-1/2">
+                    <RefreshCw size={13} className="animate-spin text-slate-400" />
+                  </div>
+                )}
+              </div>
+              <button
+                type="button"
+                className="btn-primary flex items-center gap-2"
+                onClick={() => fetchAnalysis(docId)}
+                disabled={!docId || loading}
+              >
+                <Search size={15} />
+                {loading ? 'Loading…' : 'Load Analysis'}
+              </button>
+              <button
+                type="button"
+                className="btn-secondary flex items-center gap-2"
+                onClick={reanalyze}
+                disabled={!docId || reloading}
+              >
+                <RefreshCw size={15} className={reloading ? 'animate-spin' : ''} />
+                {reloading ? 'Running…' : 'Reanalyze'}
+              </button>
+            </div>
+            {error && <p className="form-error">{error}</p>}
+          </div>
+        )}
+
+        {/* ── UPLOAD MODE ── */}
+        {mode === 'upload' && (
+          <div className="space-y-3">
+            <p className="form-label">Upload a file to scan</p>
+            <p className="text-xs text-slate-400 -mt-1">PDF, DOCX or TXT — max 20 MB. The file is not saved to the database.</p>
+
+            {/* Drop zone */}
+            <div
+              onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={handleDrop}
+              className={`relative border-2 border-dashed rounded-xl p-8 text-center transition-colors cursor-pointer
+                ${dragOver ? 'border-brand-400 bg-brand-50' : 'border-slate-200 hover:border-brand-300 hover:bg-slate-50'}`}
+              onClick={() => document.getElementById('sec-file-input').click()}
+            >
+              <input
+                id="sec-file-input"
+                type="file"
+                className="hidden"
+                accept=".pdf,.docx,.txt"
+                onChange={e => { const f = e.target.files[0]; if (f) { setFile(f); setUAnal(null); setUploadErr(null); } }}
+              />
+              <div className="flex flex-col items-center gap-3 pointer-events-none">
+                <div className={`flex h-12 w-12 items-center justify-center rounded-xl transition-colors ${dragOver ? 'bg-brand-100' : 'bg-slate-100'}`}>
+                  <FileText size={22} className={dragOver ? 'text-brand-600' : 'text-slate-400'} />
+                </div>
+                {file ? (
+                  <div>
+                    <p className="text-sm font-semibold text-slate-800">{file.name}</p>
+                    <p className="text-xs text-slate-400 mt-0.5">{(file.size / 1024).toFixed(1)} KB — click to change</p>
+                  </div>
+                ) : (
+                  <div>
+                    <p className="text-sm font-medium text-slate-600">Drop file here or <span className="text-brand-600 underline">browse</span></p>
+                    <p className="text-xs text-slate-400 mt-0.5">PDF, DOCX, TXT</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex gap-3 items-center">
+              <button
+                type="button"
+                className="btn-primary flex items-center gap-2"
+                onClick={handleUploadScan}
+                disabled={!file || uploading}
+              >
+                <Lock size={14} />
+                {uploading ? 'Scanning…' : 'Scan File'}
+              </button>
+              {file && (
+                <button
+                  type="button"
+                  className="btn-ghost text-sm"
+                  onClick={() => { setFile(null); setUAnal(null); setUploadErr(null); document.getElementById('sec-file-input').value = ''; }}
+                >
+                  Clear
+                </button>
+              )}
+              {uploading && (
+                <div className="flex items-center gap-2 text-xs text-slate-400">
+                  <RefreshCw size={13} className="animate-spin" /> Analysing content…
+                </div>
+              )}
+            </div>
+            {uploadErr && <p className="form-error">{uploadErr}</p>}
+          </div>
+        )}
       </div>
 
-      {loading && (
+      {/* Loading skeletons */}
+      {(loading || uploading) && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {[...Array(4)].map((_, i) => <Sk key={i} h="h-24" rounded="rounded-xl" />)}
         </div>
       )}
 
-      {a && (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-5">
-          {/* Score rings + badges */}
-          <div className="card card-body">
-            <div className="flex flex-wrap items-center justify-between gap-6">
-              <div className="flex items-center gap-8">
-                <ScoreRing value={a.confidentiality_score} color={cCfg.ring} label="Confidentiality" />
-                <ScoreRing value={a.risk_score} color={a.risk_score > 60 ? '#ef4444' : a.risk_score > 30 ? '#f59e0b' : '#10b981'} label="Risk Score" />
-              </div>
-              <div className="flex flex-wrap gap-3 items-center">
-                <div className="flex flex-col items-center gap-1">
-                  <span className="text-xs text-slate-400 uppercase tracking-wide">Classification</span>
-                  <span className={`badge ${cCfg.badge} text-sm px-3 py-1`}>{cCfg.label}</span>
-                </div>
-                <div className="flex flex-col items-center gap-1">
-                  <span className="text-xs text-slate-400 uppercase tracking-wide">Risk Level</span>
-                  <span className={`badge ${rCfg.badge} text-sm px-3 py-1`}>{rCfg.label}</span>
-                </div>
-                <div className="flex flex-col items-center gap-1">
-                  <span className="text-xs text-slate-400 uppercase tracking-wide">GDPR</span>
-                  <span className={`badge ${gCfg.badge} text-sm px-3 py-1`}>{gCfg.label}</span>
-                </div>
-                {a.has_secrets && <span className="badge badge-red text-xs">🔑 Secrets Detected</span>}
-                {a.is_high_risk && <span className="badge badge-purple text-xs">⚠ High Risk</span>}
-              </div>
-              <div className="text-xs text-slate-400 space-y-0.5">
-                <p>Analysed: <span className="text-slate-600">{fmt(a.analysis_date)}</span></p>
-                <p>Version: <span className="text-slate-600">{a.analysis_version}</span></p>
-              </div>
-            </div>
-            {/* Score explanation */}
-            {(a.score_explanation || []).length > 0 && (
-              <div className="mt-4 pt-4 border-t border-slate-100">
-                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Score Breakdown</p>
-                <ul className="space-y-1">
-                  {a.score_explanation.map((line, i) => (
-                    <li key={i} className="text-xs text-slate-600 flex items-start gap-1.5">
-                      <span className="text-slate-300 mt-0.5">•</span>{line}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
+      {/* Analysis result — existing doc */}
+      {mode === 'existing' && <AnalysisResult a={analysis} />}
 
-          {/* PII Detected */}
-          <Collapsible title="PII Detected" icon={User} badge={a.pii_count}>
-            {a.pii_count === 0
-              ? <p className="text-sm text-slate-400">No PII detected in this document.</p>
-              : (
-                <div className="overflow-x-auto">
-                  <table className="table-enterprise">
-                    <thead><tr><th>Type</th><th>Value (redacted)</th><th>Context</th></tr></thead>
-                    <tbody>
-                      {(a.pii_details || []).map((d, i) => (
-                        <tr key={i}>
-                          <td><span className="badge badge-blue text-xs">{d.type}</span></td>
-                          <td className="font-mono text-xs text-slate-500">{d.value}</td>
-                          <td className="text-xs text-slate-400 max-w-xs truncate-2">{d.context}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-          </Collapsible>
-
-          {/* Secrets Detected */}
-          <Collapsible title="Secrets & Credentials" icon={Key} badge={a.secret_count}>
-            {a.secret_count === 0
-              ? <p className="text-sm text-slate-400">No secrets or credentials detected.</p>
-              : (
-                <div className="overflow-x-auto">
-                  <table className="table-enterprise">
-                    <thead><tr><th>Type</th><th>Value (redacted)</th><th>Confidence</th><th>Context</th></tr></thead>
-                    <tbody>
-                      {(a.secret_details || []).map((d, i) => (
-                        <tr key={i}>
-                          <td><span className="badge badge-red text-xs">{d.type}</span></td>
-                          <td className="font-mono text-xs text-slate-500">{d.value}</td>
-                          <td className="tabular-nums text-xs">{d.confidence != null ? `${(d.confidence * 100).toFixed(0)}%` : '—'}</td>
-                          <td className="text-xs text-slate-400 max-w-xs truncate-2">{d.context}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-          </Collapsible>
-
-          {/* Metadata */}
-          <Collapsible title="Document Metadata" icon={FileText} badge={`risk: ${a.metadata_risk}`}>
-            {!a.metadata_details || Object.keys(a.metadata_details).length === 0
-              ? <p className="text-sm text-slate-400">No metadata extracted.</p>
-              : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {Object.entries(a.metadata_details).map(([k, v]) => {
-                    if (v == null || v === false || (Array.isArray(v) && v.length === 0)) return null;
-                    return (
-                      <div key={k} className="flex flex-col gap-0.5">
-                        <span className="text-2xs font-semibold uppercase tracking-wide text-slate-400">{k.replace(/_/g, ' ')}</span>
-                        <span className="text-sm text-slate-700 break-words">
-                          {Array.isArray(v) ? v.join(', ') : String(v)}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-          </Collapsible>
-
-          {/* GDPR */}
-          <Collapsible title="GDPR / RGPD Compliance" icon={ShieldCheck}>
-            <div className="space-y-3">
-              <div className="flex flex-wrap gap-3">
-                <div className="flex items-center gap-2 text-sm">
-                  {a.gdpr_has_pii ? <XCircle size={14} className="text-red-500" /> : <CheckCircle2 size={14} className="text-emerald-500" />}
-                  PII present
-                </div>
-                <div className="flex items-center gap-2 text-sm">
-                  {a.gdpr_has_sensitive ? <XCircle size={14} className="text-red-500" /> : <CheckCircle2 size={14} className="text-emerald-500" />}
-                  Sensitive data
-                </div>
-                <div className="flex items-center gap-2 text-sm">
-                  {a.gdpr_has_financial ? <XCircle size={14} className="text-red-500" /> : <CheckCircle2 size={14} className="text-emerald-500" />}
-                  Financial data
-                </div>
-              </div>
-              {a.gdpr_compliance_summary && (
-                <div className="alert-info text-sm">{a.gdpr_compliance_summary}</div>
-              )}
-              {(a.gdpr_issues || []).length > 0 && (
-                <ul className="space-y-1 mt-2">
-                  {a.gdpr_issues.map((issue, i) => (
-                    <li key={i} className="text-sm text-red-600 flex items-start gap-1.5">
-                      <AlertCircle size={13} className="mt-0.5 shrink-0" />{issue}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </Collapsible>
-
-          {/* Recommendations */}
-          <Collapsible title="AI Recommendations" icon={Activity} badge={(a.recommendations || []).length}>
-            {(a.recommendations || []).length === 0
-              ? <p className="text-sm text-slate-400">No recommendations generated.</p>
-              : (
-                <div className="space-y-3">
-                  {a.recommendations.map((r, i) => {
-                    const pCfg = PRIO_CFG[r.priority] || PRIO_CFG.LOW;
-                    return (
-                      <div key={i} className="border border-slate-100 rounded-xl p-4 hover:bg-slate-50/50 transition-colors">
-                        <div className="flex items-start justify-between gap-3 mb-1.5">
-                          <p className={`text-sm font-semibold ${pCfg.color}`}>{r.title}</p>
-                          <div className="flex items-center gap-1.5 shrink-0">
-                            <span className={`badge ${pCfg.badge} text-xs`}>{r.priority}</span>
-                            {r.category && <span className="badge badge-slate text-xs">{r.category}</span>}
-                          </div>
-                        </div>
-                        <p className="text-xs text-slate-500 mb-2">{r.description}</p>
-                        {r.action && (
-                          <p className="text-xs font-medium text-slate-700">
-                            <span className="text-slate-400">Action: </span>{r.action}
-                          </p>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-          </Collapsible>
-        </motion.div>
-      )}
+      {/* Analysis result — uploaded file */}
+      {mode === 'upload' && <AnalysisResult a={uploadAnal} />}
     </div>
   );
 }
