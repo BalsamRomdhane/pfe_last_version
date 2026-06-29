@@ -546,4 +546,44 @@ def get_prometheus_metrics() -> str:
             '',
         ]
 
+    # ── Security Analysis metrics ─────────────────────────────────────────
+    try:
+        from django.db.models import Avg, Sum
+        from security.models import DocumentSecurityAnalysis
+
+        sec_total = DocumentSecurityAnalysis.objects.count()
+        sec_high  = DocumentSecurityAnalysis.objects.filter(
+            risk_level__in=['HIGH', 'CRITICAL']
+        ).count()
+        agg = DocumentSecurityAnalysis.objects.aggregate(
+            total_pii=Sum('pii_count'),
+            total_secrets=Sum('secret_count'),
+            avg_risk=Avg('risk_score'),
+        )
+
+        lines += [
+            '# HELP security_documents_total Total documents with security analysis',
+            '# TYPE security_documents_total gauge',
+            f'security_documents_total {sec_total}',
+            '',
+            '# HELP security_high_risk_documents Documents with HIGH or CRITICAL risk',
+            '# TYPE security_high_risk_documents gauge',
+            f'security_high_risk_documents {sec_high}',
+            '',
+            '# HELP security_pii_detected_total Total PII items detected across all documents',
+            '# TYPE security_pii_detected_total gauge',
+            f'security_pii_detected_total {agg["total_pii"] or 0}',
+            '',
+            '# HELP security_secrets_detected_total Total secrets/credentials detected',
+            '# TYPE security_secrets_detected_total gauge',
+            f'security_secrets_detected_total {agg["total_secrets"] or 0}',
+            '',
+            '# HELP security_average_risk_score Average risk score across all analysed documents',
+            '# TYPE security_average_risk_score gauge',
+            f'security_average_risk_score {round(agg["avg_risk"] or 0.0, 2)}',
+            '',
+        ]
+    except Exception:
+        logger.warning('get_prometheus_metrics: security metrics unavailable (app not migrated yet)')
+
     return '\n'.join(lines)

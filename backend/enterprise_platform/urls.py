@@ -9,6 +9,7 @@ urlpatterns = [
     path('api/rbac/',          include('rbac.urls')),
     path('api/compliance-os/', include('compliance.urls')),
     path('api/notifications/', include('notifications.urls')),
+    path('api/security/',      include('security.urls')),
     path('api/',               include('api.urls')),
 ]
 

@@ -6,7 +6,7 @@ import {
   LayoutDashboard, FileText, ClipboardCheck, BookOpen,
   ScanSearch, Layers, Brain, ShieldCheck, Users, Building2,
   Settings, ChevronDown, X, Bell, Activity, Database,
-  BarChart3, GitBranch, Sparkles,
+  BarChart3, GitBranch, Sparkles, Lock,
 } from 'lucide-react';
 
 /* ─── Navigation tree ──────────────────────────────────────────────────── */
@@ -27,6 +27,7 @@ const NAV = [
       { label: 'Evidence Library',     icon: Layers,      path: '/evidence-intelligence',roles: ['ADMIN','TEAMLEAD'] },
       { label: 'Semantic Search',      icon: Brain,       path: '/semantic-search',      roles: ['ADMIN','TEAMLEAD'] },
       { label: 'Compliance Dashboard', icon: ShieldCheck, path: '/compliance-dashboard', roles: ['ADMIN','TEAMLEAD'] },
+      { label: 'Document Security',    icon: Lock,        path: '/document-security',    roles: ['ADMIN','TEAMLEAD'] },
     ],
   },
   {

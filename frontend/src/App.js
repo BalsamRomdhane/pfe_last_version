@@ -24,6 +24,7 @@ import DatasetQuality       from './pages/DatasetQuality';
 import AIInsights           from './pages/AIInsights';
 import MLOps                from './pages/MLOps';
 import ComplianceDashboard  from './pages/ComplianceDashboard';
+import DocumentSecurity     from './pages/DocumentSecurity';
 
 // ── Guards ────────────────────────────────────────────────────────────────────
 function LoadingScreen() {
@@ -117,6 +118,9 @@ function AppContent() {
         } />
         <Route path="/ai-insights" element={
           <OptionalPage Component={AIInsights} roles={['ADMIN','TEAMLEAD']} />
+        } />
+        <Route path="/document-security" element={
+          <OptionalPage Component={DocumentSecurity} roles={['ADMIN','TEAMLEAD']} />
         } />
 
         {/* Admin only */}

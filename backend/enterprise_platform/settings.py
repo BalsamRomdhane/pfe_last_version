@@ -86,6 +86,7 @@ INSTALLED_APPS = [
     'api',
     'compliance',
     'notifications',
+    'security',
 ]
 
 # ── Django Channels (WebSockets — no Redis needed in dev) ─────────────────────

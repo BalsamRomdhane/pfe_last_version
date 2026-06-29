@@ -170,6 +170,28 @@ pipeline {
         }
 
         // ────────────────────────────────────────────────────────────
+        // STAGE 4.5 · Security Analysis Validation
+        //
+        // Verifie que le module Document Security Analysis est
+        // correctement installe, migre et operationnel.
+        // Controles :
+        //   - import des modeles, serializers, orchestrateur
+        //   - import des 6 sous-detecteurs (PII, secrets, metadata, etc.)
+        //   - acces a la table DB (migration appliquee)
+        //   - routing URL fonctionnel
+        // Script : ci/check_security.py
+        // ────────────────────────────────────────────────────────────
+        stage('4.5 - Security Analysis Validation') {
+            steps {
+                echo "[INFO] Validation du module Document Security Analysis..."
+                dir("${BACKEND_DIR}") {
+                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe ci\\check_security.py'
+                }
+                echo "[OK] Security Analysis module valide sans regression."
+            }
+        }
+
+        // ────────────────────────────────────────────────────────────
         // STAGE 5 · Drift Detection
         //
         // Calcule le drift semantique entre donnees historiques et
