@@ -218,17 +218,9 @@ const Login = () => {
             <h1 className="text-xl font-bold text-white leading-snug mb-1 tracking-tight">
               Enterprise ISO Compliance
             </h1>
-            <p className="text-xs text-slate-400 font-medium mb-3">
+            <p className="text-xs text-slate-400 font-medium">
               AI-Powered Governance &amp; Document Intelligence
             </p>
-
-            {/* Capgemini mention */}
-            <div className="flex items-center gap-2 opacity-40">
-              <span className="text-xs text-slate-500 tracking-wide">Developed during</span>
-              <img src={capgeminiLogo} alt="Capgemini" className="h-3.5 w-auto"
-                   style={{ filter: 'brightness(0) invert(1)' }}/>
-              <span className="text-xs text-slate-500">Internship</span>
-            </div>
           </motion.div>
 
           {/* ── Divider ── */}
