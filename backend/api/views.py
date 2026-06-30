@@ -21,7 +21,7 @@ _DASHBOARD_CACHE_TTL = 120   # 2 minutes
 # Constant for ML unavailability message — avoids duplicating this
 # literal string across three separate training endpoints.
 _ML_UNAVAILABLE_MSG = (
-    {'error': _ML_UNAVAILABLE_MSG},
+    'ML training unavailable \u2014 install Visual C++ Redistributable 2019 '
     'and restart the server.'
 )
 
