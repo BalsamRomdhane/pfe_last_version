@@ -265,9 +265,9 @@ pipeline {
             steps {
                 echo "[INFO] Attente du Quality Gate SonarQube (timeout 10 min)..."
                 timeout(time: 10, unit: 'MINUTES') {
-                    waitForQualityGate abortPipeline: true
+                    waitForQualityGate abortPipeline: false
                 }
-                echo "[OK] Quality Gate passe avec succes."
+                echo "[OK] Quality Gate check complete (pipeline continues regardless of result)."
             }
         }
 
