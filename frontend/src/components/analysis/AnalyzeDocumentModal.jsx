@@ -310,8 +310,9 @@ export default function AnalyzeDocumentModal({ isOpen, onClose, norms = [], defa
                               {/* Norm select */}
                               {norms.length > 0 && (
                                 <div>
-                                  <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500">ISO Standard</label>
+                                  <label htmlFor="modal-norm-select" className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500">ISO Standard</label>
                                   <select
+                                    id="modal-norm-select"
                                     value={normId}
                                     onChange={(e) => setNormId(e.target.value)}
                                     className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-sky-400 focus:ring-2 focus:ring-sky-100"
@@ -324,8 +325,8 @@ export default function AnalyzeDocumentModal({ isOpen, onClose, norms = [], defa
                               )}
 
                               {/* Analysis level */}
-                              <div>
-                                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500">Analysis depth</label>
+                              <fieldset>
+                                <legend className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500">Analysis depth</legend>
                                 <div className="grid grid-cols-3 gap-2">
                                   {ANALYSIS_LEVELS.map((l) => (
                                     <button
@@ -343,11 +344,11 @@ export default function AnalyzeDocumentModal({ isOpen, onClose, norms = [], defa
                                     </button>
                                   ))}
                                 </div>
-                              </div>
+                              </fieldset>
 
                               {/* Toggles */}
-                              <div>
-                                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500">Features</label>
+                              <fieldset>
+                                <legend className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500">Features</legend>
                                 <div className="grid grid-cols-2 gap-2">
                                   {TOGGLES.map((t) => (
                                     <Toggle
@@ -358,7 +359,7 @@ export default function AnalyzeDocumentModal({ isOpen, onClose, norms = [], defa
                                     />
                                   ))}
                                 </div>
-                              </div>
+                              </fieldset>
                             </div>
                           </motion.div>
                         )}

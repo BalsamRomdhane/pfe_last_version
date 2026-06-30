@@ -354,49 +354,6 @@ def load_dataset_with_metadata(standard=None, norme_id=None, source='auto'):
 
     return np.array(X, dtype=np.int64), np.array(y, dtype=np.int64), np.array(groups, dtype=np.int64), metadata
 
-    # auto: prefer the document-level dataset when possible, otherwise fall back to evidence rows.
-    document_samples = _get_labeled_document_samples(standard=standard, norme_id=norme_id)
-    evidence_samples = _get_labeled_evidence_samples(standard=standard, norme_id=norme_id)
-
-    if document_samples.exists() and (not evidence_samples.exists() or document_samples.count() >= evidence_samples.count()):
-        for sample in document_samples:
-            features = sample.features or {}
-            if not features:
-                continue
-            feature_values = build_feature_vector(features, sample.standard or standard)
-            if not feature_values:
-                continue
-            X.append(feature_values)
-            y.append(1 if _normalize_label_value(sample.label) == 'approved' else 0)
-    else:
-        for sample in evidence_samples:
-            X.append(_vectorize_evidence_sample(sample))
-            y.append(1 if _normalize_label_value(sample.label) == 'approved' else 0)
-
-    if X:
-        return np.array(X, dtype=np.float64 if source_mode == 'evidence' or (source_mode == 'auto' and evidence_samples.exists() and not document_samples.exists()) else np.int64), np.array(y, dtype=np.int64)
-
-    # Fallback to the other source if the preferred source has no usable rows.
-    if document_samples.exists():
-        for sample in document_samples:
-            features = sample.features or {}
-            if not features:
-                continue
-            feature_values = build_feature_vector(features, sample.standard or standard)
-            if feature_values:
-                X.append(feature_values)
-                y.append(1 if _normalize_label_value(sample.label) == 'approved' else 0)
-    elif evidence_samples.exists():
-        for sample in evidence_samples:
-            X.append(_vectorize_evidence_sample(sample))
-            y.append(1 if _normalize_label_value(sample.label) == 'approved' else 0)
-
-    if X and all(isinstance(v, (int, np.integer)) for row in X for v in row):
-        return np.array(X, dtype=np.int64), np.array(y, dtype=np.int64)
-    if X:
-        return np.array(X, dtype=np.float64), np.array(y, dtype=np.int64)
-    return np.array(X, dtype=np.int64), np.array(y, dtype=np.int64)
-
 
 def _remove_verdict_markers(text: str) -> str:
     """Strip deterministic verdict markers embedded in synthetic training texts.
@@ -517,9 +474,8 @@ def _split_train_validation_test(X, y, groups=None):
         temp_groups = groups[temp_idx]
         splitter = GroupShuffleSplit(n_splits=1, test_size=0.5, random_state=43)
         val_idx, test_idx = next(splitter.split(X[temp_idx], y[temp_idx], groups=temp_groups))
-        val_idx = temp_idx[val_idx]
+        val_idx  = temp_idx[val_idx]
         test_idx = temp_idx[test_idx]
-        train_idx = train_idx
         return train_idx, val_idx, test_idx
 
     train_idx, temp_idx = train_test_split(
@@ -610,7 +566,10 @@ def _risk_level_from_value(value):
 def _detect_leakage(X, y, groups, metadata=None):
     duplicate_rows = 0
     try:
-        duplicate_rows = sum(1 for row in np.asarray(X) if list(row).count(list(row)[0]) > 1)
+        duplicate_rows = sum(
+            1 for row in np.asarray(X)
+            if list(row).count(next(iter(row))) > 1
+        )
     except Exception:
         duplicate_rows = 0
 

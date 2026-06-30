@@ -101,13 +101,13 @@ _PATTERNS: List[tuple[str, re.Pattern, float]] = [
      ), 0.96),
 
     # GitHub personal access token (classic ghp_ prefix)
-    ('GITHUB_TOKEN',
+    ('GITHUB_TOKEN_CLASSIC',
      re.compile(
          r'\bghp_[A-Za-z0-9]{36}\b',
      ), 0.97),
 
-    # GitHub fine-grained PAT
-    ('GITHUB_TOKEN',
+    # GitHub fine-grained PAT (github_pat_ prefix — distinct from classic)
+    ('GITHUB_TOKEN_FINEGRAINED',
      re.compile(
          r'\bgithub_pat_[A-Za-z0-9_]{82}\b',
      ), 0.97),

@@ -78,7 +78,7 @@ const ResetPassword = () => {
                     value={form[f.id]}
                     onChange={handleChange}
                     disabled={loading}
-                    autoComplete={f.id === 'new_password' ? 'new-password' : 'new-password'}
+                    autoComplete={f.id === 'new_password' ? 'new-password' : 'current-password'}
                     className="w-full rounded-xl border border-white/10 bg-white/[0.06] px-4 py-2.5 pr-11 text-sm text-white
                                focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 outline-none transition-all
                                disabled:opacity-50"

@@ -602,14 +602,14 @@ function AnalysisTab() {
             <p className="form-label">Upload a file to scan</p>
             <p className="text-xs text-slate-400 -mt-1">PDF, DOCX or TXT — max 20 MB. The file is not saved to the database.</p>
 
-            {/* Drop zone */}
-            <div
+            {/* Drop zone — label wraps the hidden input for native click forwarding */}
+            <label
+              htmlFor="sec-file-input"
               onDragOver={e => { e.preventDefault(); setDragOver(true); }}
               onDragLeave={() => setDragOver(false)}
               onDrop={handleDrop}
-              className={`relative border-2 border-dashed rounded-xl p-8 text-center transition-colors cursor-pointer
+              className={`relative border-2 border-dashed rounded-xl p-8 text-center transition-colors cursor-pointer block
                 ${dragOver ? 'border-brand-400 bg-brand-50' : 'border-slate-200 hover:border-brand-300 hover:bg-slate-50'}`}
-              onClick={() => document.getElementById('sec-file-input').click()}
             >
               <input
                 id="sec-file-input"
@@ -634,7 +634,7 @@ function AnalysisTab() {
                   </div>
                 )}
               </div>
-            </div>
+            </label>
 
             <div className="flex gap-3 items-center">
               <button

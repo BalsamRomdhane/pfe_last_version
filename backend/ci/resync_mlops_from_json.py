@@ -64,9 +64,9 @@ for mf in metrics_files:
         from datetime import datetime
         trained_dt = datetime.strptime(trained_at_str, '%Y-%m-%d %H:%M:%S') if trained_at_str else None
         from django.utils import timezone as tz
+        from datetime import timezone as _utc
         if trained_dt:
-            import pytz
-            trained_dt = tz.make_aware(trained_dt, pytz.UTC)
+            trained_dt = trained_dt.replace(tzinfo=_utc.utc)
         else:
             trained_dt = tz.now()
     except Exception:

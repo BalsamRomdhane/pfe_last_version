@@ -208,8 +208,9 @@ const UserModal = ({
           )}
 
           <div>
-            <label className="text-sm text-gray-600">Date de naissance</label>
+            <label htmlFor="date_naissance" className="text-sm text-gray-600">Date de naissance</label>
             <input
+              id="date_naissance"
               name="date_naissance"
               type="date"
               value={form.date_naissance}

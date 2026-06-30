@@ -32,12 +32,15 @@ function RuleRow({ item, index, onChange }) {
         </div>
 
         <label className="flex items-center gap-2 cursor-pointer shrink-0">
-          <div
+          <button
+            type="button"
+            role="switch"
+            aria-checked={item.is_valid}
             onClick={() => onChange(index, 'is_valid', !item.is_valid)}
             className={`relative h-5 w-9 rounded-full transition-colors cursor-pointer ${item.is_valid ? 'bg-emerald-500' : 'bg-slate-300'}`}
           >
             <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${item.is_valid ? 'translate-x-4' : 'translate-x-0.5'}`} />
-          </div>
+          </button>
           <span className={`text-xs font-semibold ${item.is_valid ? 'text-emerald-600' : 'text-slate-500'}`}>
             {item.is_valid ? 'Valid' : 'Invalid'}
           </span>
@@ -45,8 +48,9 @@ function RuleRow({ item, index, onChange }) {
       </div>
 
       <div className="mt-3">
-        <label className="form-label text-xs">Evidence text</label>
+        <label htmlFor={`evidence-${index}`} className="form-label text-xs">Evidence text</label>
         <textarea
+          id={`evidence-${index}`}
           value={item.evidence_text}
           onChange={e => onChange(index, 'evidence_text', e.target.value)}
           rows={2}
@@ -232,10 +236,11 @@ const Validations = () => {
 
               {/* Document search */}
               <div>
-                <label className="form-label">Select Document</label>
+                <label htmlFor="doc-search" className="form-label">Select Document</label>
                 <div className="relative">
                   <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                   <input
+                    id="doc-search"
                     placeholder="Search by ID, employee, filename…"
                     value={docSearch}
                     onChange={e => setDocSearch(e.target.value)}
@@ -363,8 +368,9 @@ const Validations = () => {
 
                       <div className="space-y-3">
                         <div>
-                          <label className="form-label">Reason for decision <span className="text-red-500">*</span></label>
+                          <label htmlFor="decision-reason" className="form-label">Reason for decision <span className="text-red-500">*</span></label>
                           <textarea
+                            id="decision-reason"
                             value={decisionReason}
                             onChange={e => setDecisionReason(e.target.value)}
                             rows={3}
@@ -373,8 +379,9 @@ const Validations = () => {
                           />
                         </div>
                         <div>
-                          <label className="form-label">Additional comments</label>
+                          <label htmlFor="reviewer-comments" className="form-label">Additional comments</label>
                           <textarea
+                            id="reviewer-comments"
                             value={comments}
                             onChange={e => setComments(e.target.value)}
                             rows={2}

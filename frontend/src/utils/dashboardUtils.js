@@ -22,10 +22,10 @@
  * Returns a numeric percentage (0–100) or 0.
  */
 export const safePercent = (value, total) => {
-  if (!total || total === 0 || isNaN(total)) return 0;
-  if (value === undefined || value === null || isNaN(value)) return 0;
+  if (!total || total === 0 || Number.isNaN(total)) return 0;
+  if (value === undefined || value === null || Number.isNaN(value)) return 0;
   const percent = (value / total) * 100;
-  if (!isFinite(percent) || isNaN(percent)) return 0;
+  if (!Number.isFinite(percent) || Number.isNaN(percent)) return 0;
   return Math.round(percent * 100) / 100;
 };
 
@@ -41,7 +41,7 @@ export const safePercent = (value, total) => {
  */
 export const formatPercent = (percent, showSign = true) => {
   // Explicitly absent or invalid → show dash, not a fake zero
-  if (percent === undefined || percent === null || isNaN(percent) || !isFinite(percent)) {
+  if (percent === undefined || percent === null || Number.isNaN(percent) || !Number.isFinite(percent)) {
     return '—';
   }
 
@@ -61,8 +61,8 @@ export const formatPercent = (percent, showSign = true) => {
  * Returns placeholder when count is invalid.
  */
 export const safeCount = (count, placeholder = '0') => {
-  if (count === undefined || count === null || isNaN(count)) return placeholder;
-  if (!isFinite(count)) return placeholder;
+  if (count === undefined || count === null || Number.isNaN(count)) return placeholder;
+  if (!Number.isFinite(count)) return placeholder;
   return count;
 };
 
@@ -70,10 +70,10 @@ export const safeCount = (count, placeholder = '0') => {
  * Safe division with fallback.
  */
 export const safeDivide = (a, b, fallback = 0) => {
-  if (!b || b === 0 || isNaN(b) || !isFinite(b)) return fallback;
-  if (a === undefined || a === null || isNaN(a)) return fallback;
+  if (!b || b === 0 || Number.isNaN(b) || !Number.isFinite(b)) return fallback;
+  if (a === undefined || a === null || Number.isNaN(a)) return fallback;
   const result = a / b;
-  if (!isFinite(result) || isNaN(result)) return fallback;
+  if (!Number.isFinite(result) || Number.isNaN(result)) return fallback;
   return result;
 };
 

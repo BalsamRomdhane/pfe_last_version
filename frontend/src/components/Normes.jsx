@@ -286,7 +286,7 @@ const Normes = () => {
 
         {/* ── Delete confirm modal ── */}
         {deleteId && (
-          <div className="modal-backdrop" onClick={() => setDeleteId(null)}>
+          <div className="modal-backdrop" role="presentation" onClick={() => setDeleteId(null)}>
             <div className="modal-panel max-w-md" onClick={e => e.stopPropagation()}>
               <div className="modal-header">
                 <h3 className="text-base font-semibold text-slate-900">Delete Standard</h3>

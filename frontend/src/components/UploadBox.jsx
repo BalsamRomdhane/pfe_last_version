@@ -9,7 +9,7 @@ const formatBytes = (bytes) => {
   const k = 1024;
   const sizes = ['bytes', 'KB', 'MB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+  return `${Number.parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
 };
 
 const getFileIcon = (fileName) => {

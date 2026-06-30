@@ -174,8 +174,9 @@ export default function DocumentAnalysis() {
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-[1fr_1fr_auto]">
                 {/* Standard selector */}
                 <div>
-                  <label className="form-label">Standard</label>
+                  <label htmlFor="da-standard-select" className="form-label">Standard</label>
                   <select
+                    id="da-standard-select"
                     value={selectedNormeId || ''}
                     onChange={e => setSelectedNormeId(Number(e.target.value))}
                     disabled={normes.length === 0}
@@ -190,13 +191,14 @@ export default function DocumentAnalysis() {
 
                 {/* File picker */}
                 <div>
-                  <label className="form-label">Document</label>
+                  <label htmlFor="da-file-input" className="form-label">Document</label>
                   <div className="relative rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 cursor-pointer hover:bg-slate-100 transition-colors">
                     <div className="flex items-center gap-2 text-sm text-slate-600">
                       <UploadCloud size={15} className="text-slate-400 shrink-0" />
                       <span className="truncate">{file?.name || 'Choose a PDF or DOCX file'}</span>
                     </div>
                     <input
+                      id="da-file-input"
                       type="file"
                       accept=".pdf,.docx"
                       onChange={e => { setFile(e.target.files?.[0] || null); setAnalysis(null); }}

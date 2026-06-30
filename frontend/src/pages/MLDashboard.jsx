@@ -257,17 +257,17 @@ export default function MLDashboard() {
           </div>
           <div className="flex flex-wrap items-end gap-3">
             <div>
-              <label className="form-label">Dataset</label>
-              <select value={datasetType} className="form-select"
+              <label htmlFor="ml-dataset-select" className="form-label">Dataset</label>
+              <select id="ml-dataset-select" value={datasetType} className="form-select"
                 onChange={e => { setDatasetType(e.target.value); setModels([]); setBestModel(null); setSelectedModel(null); setTestResult(null); }}>
                 <option value="classification">Classification</option>
                 <option value="evidence">Evidence</option>
               </select>
             </div>
             <div>
-              <label className="form-label">Standard</label>
+              <label htmlFor="ml-standard-select" className="form-label">Standard</label>
               {normsLoading ? <div className="skeleton h-9 w-40 rounded-lg" /> : (
-                <select value={selectedNormId ?? ''} disabled={!norms.length}
+                <select id="ml-standard-select" value={selectedNormId ?? ''} disabled={!norms.length}
                   onChange={e => handleNormChange(e.target.value)} className="form-select">
                   {!norms.length ? <option value="">No standards</option>
                     : norms.map(n => <option key={n.id} value={String(n.id)}>{n.name}</option>)}
@@ -516,16 +516,17 @@ export default function MLDashboard() {
               </div>
             )}
 
-            {/* Drop zone */}
-            <div
+            {/* Drop zone — label wraps the hidden input for native keyboard/click support */}
+            <label
+              htmlFor="ml-test-file-input"
               onDragOver={e => { e.preventDefault(); setIsDragActive(true); }}
               onDragLeave={() => setIsDragActive(false)}
               onDrop={handleDrop}
-              className={`relative cursor-pointer rounded-xl border-2 border-dashed p-8 text-center transition-all ${
+              className={`relative cursor-pointer rounded-xl border-2 border-dashed p-8 text-center transition-all block ${
                 isDragActive ? "border-brand-400 bg-brand-50" : file ? "border-emerald-300 bg-emerald-50/40" : "border-slate-200 hover:border-slate-300 hover:bg-slate-50"
               }`}
             >
-              <input type="file" accept=".pdf,.docx,.txt" onChange={handleFileChange} className="absolute inset-0 h-full w-full cursor-pointer opacity-0"/>
+              <input id="ml-test-file-input" type="file" accept=".pdf,.docx,.txt" onChange={handleFileChange} className="absolute inset-0 h-full w-full cursor-pointer opacity-0"/>
               {file ? (
                 <div className="flex items-center justify-center gap-3">
                   <CheckCircle2 size={20} className="text-emerald-500"/>
@@ -541,7 +542,7 @@ export default function MLDashboard() {
                   <p className="text-xs text-slate-400">PDF, DOCX, TXT supported</p>
                 </div>
               )}
-            </div>
+            </label>
 
             <button
               onClick={handleAnalyze}

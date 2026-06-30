@@ -599,7 +599,7 @@ class ComplianceEngine:
             part = part.strip()
             if not part:
                 continue
-            cleaned = re.sub(r'\b(absent|absente|absents|manquant|manquante|manquants|manquantes|absence|statut|validation|validation|révision|revision|date|expir(?:e|ation)|dépasseé|dépassée)\b', '', part)
+            cleaned = re.sub(r'\b(absent|absente|absents|manquant|manquante|manquants|manquantes|absence|statut|validation|révision|revision|date|expir(?:e|ation)|dépasseé|dépassée)\b', '', part)
             cleaned = re.sub(r'[^\w\s\-]', ' ', cleaned)
             cleaned = re.sub(r'\s+', ' ', cleaned).strip()
             if cleaned:

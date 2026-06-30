@@ -157,10 +157,11 @@ export default function SemanticSearch() {
               <div className="grid gap-4 sm:grid-cols-[1fr_200px_120px_auto]">
                 {/* Query */}
                 <div>
-                  <label className="form-label">Search Query</label>
+                  <label htmlFor="ss-query" className="form-label">Search Query</label>
                   <div className="relative">
                     <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                     <input
+                      id="ss-query"
                       type="text"
                       value={query}
                       onChange={e => setQuery(e.target.value)}
@@ -172,8 +173,9 @@ export default function SemanticSearch() {
 
                 {/* Standard */}
                 <div>
-                  <label className="form-label">Standard</label>
+                  <label htmlFor="ss-standard" className="form-label">Standard</label>
                   <select
+                    id="ss-standard"
                     value={standard}
                     onChange={e => setStandard(e.target.value)}
                     className="form-select"
@@ -184,8 +186,9 @@ export default function SemanticSearch() {
 
                 {/* Top K */}
                 <div>
-                  <label className="form-label">Results</label>
+                  <label htmlFor="ss-topk" className="form-label">Results</label>
                   <input
+                    id="ss-topk"
                     type="number"
                     min={1}
                     max={20}
