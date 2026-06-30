@@ -1,64 +1,54 @@
-// ============================================================
-// Jenkinsfile - Enterprise ISO Compliance Platform
-// Pipeline MLOps + DevSecOps - Windows local, sans Docker
-// Jenkins 2.555+ - Declarative Pipeline - UTF-8 sans BOM
-//
-// ARCHITECTURE :
-//   Le fichier backend/.env est GENERE automatiquement au
-//   stage "2 - Generate Env File" a partir des variables
-//   definies dans le bloc environment{} ci-dessous.
-//   Il N EST PAS requis sur le disque de l agent.
-//   Il N EST PAS versionne dans Git (.gitignore).
-//   Il est SUPPRIME dans post { always } apres chaque build.
-//
-//   Toutes les valeurs sont des parametres de developpement
-//   local. Pour un environnement de production, remplacer
-//   les valeurs sensibles par des Jenkins Credentials.
-//
-// OUTILS JENKINS REQUIS (Manage Jenkins > Tools) :
-//   SonarQube Scanner : SonarScanner
-//
-// PLUGINS REQUIS :
-//   pipeline, git, sonar, timestamper, build-discarder
+// ══════════════════════════════════════════════════════════════════════
+// Jenkinsfile — Enterprise ISO Compliance Platform
+// Pipeline MLOps + DevSecOps — Windows local, sans Docker
 //
 // STAGES :
-//   1  - Checkout
-//   2  - Generate Env File
-//   3  - Python Environment
-//   4  - Install Backend Dependencies
-//   5  - Install Frontend Dependencies
-//   6  - Django Check & Migrate
-//   7  - Django Tests
-//   8  - Frontend Build
-//   9  - Dataset Validation
-//   10 - Security Module Check
-//   11 - Drift Detection
-//   12 - SonarQube Analysis
-//   13 - Quality Gate
-//   14 - ML Training
-//   15 - Export Metrics
-//   16 - TrainingJob Update
-//   17 - Archive Artifacts
-//   18 - Cleanup
-// ============================================================
+//   1  · Checkout
+//   2  · Install Dependencies
+//   3  · Django Check & Migrate
+//   4  · Dataset Validation
+//   5  · Drift Detection
+//   6  · SonarQube Analysis        (DevSecOps)
+//   7  · Quality Gate              (DevSecOps)
+//   8  · ML Training
+//   9  · Export Metriques
+//   10 · TrainingJob Update
+//   11 · Cleanup
+//
+// ARCHITECTURE :
+//   Tout le code Python multi-lignes est dans backend/ci/*.py
+//   Les stages bat n'appellent que des commandes simples sur une ligne
+//   Aucun bloc python -c "..." multi-lignes dans ce fichier
+//
+// SONARQUBE :
+//   - Jenkins tool name  : SonarScanner   (Manage Jenkins > Tools)
+//   - Jenkins server name: SonarQube      (Manage Jenkins > System > SonarQube Servers)
+//   - Credential ID      : sonarqube-token (Secret Text)
+//   - sonar-project.properties au root du workspace
+//   - Aucun token ni URL hardcodes — injectes par withSonarQubeEnv
+// ══════════════════════════════════════════════════════════════════════
 
 pipeline {
-
     agent any
 
-    // ----------------------------------------------------------
-    // Options globales
-    // ----------------------------------------------------------
-    options {
-        timeout(time: 90, unit: 'MINUTES')
-        buildDiscarder(logRotator(numToKeepStr: '10', artifactNumToKeepStr: '5'))
-        timestamps()
-        skipDefaultCheckout(false)
+    // ── Variables d'environnement globales ──────────────────────────
+    environment {
+        // Chemin vers le backend Django
+        BACKEND_DIR            = "${WORKSPACE}\\backend"
+        DJANGO_SETTINGS_MODULE = "enterprise_platform.settings"
+
+        // Force UTF-8 — obligatoire sur Windows CP850/CP1252
+        PYTHONIOENCODING = "utf-8"
+        PYTHONUTF8       = "1"
+
+        // PostgreSQL — adapter selon la machine locale
+        DB_HOST = "localhost"
+        DB_PORT = "5432"
+        DB_NAME = "compliance_db"
+        DB_USER = "postgres"
     }
 
-    // ----------------------------------------------------------
-    // Parametres de build
-    // ----------------------------------------------------------
+    // ── Parametres de build ─────────────────────────────────────────
     parameters {
         choice(
             name: 'STANDARD',
@@ -73,256 +63,101 @@ pipeline {
         booleanParam(
             name: 'SKIP_SONAR',
             defaultValue: false,
-            description: 'Ignorer l analyse SonarQube (debug uniquement)'
-        )
-        booleanParam(
-            name: 'SKIP_FRONTEND',
-            defaultValue: false,
-            description: 'Ignorer le build frontend'
-        )
-        booleanParam(
-            name: 'SKIP_TRAINING',
-            defaultValue: false,
-            description: 'Ignorer l entrainement ML'
+            description: 'Ignorer lanalyse SonarQube (debug uniquement)'
         )
     }
 
-    // ----------------------------------------------------------
-    // Variables globales du pipeline.
-    // Toutes les variables necessaires pour generer backend/.env
-    // sont definies ici. Aucun credentials Jenkins requis.
-    // Le .env est genere au stage 2 et supprime dans post{always}.
-    // ----------------------------------------------------------
-    environment {
-        BACKEND_DIR             = "${WORKSPACE}\\backend"
-        FRONTEND_DIR            = "${WORKSPACE}\\frontend"
-        ARTIFACTS_DIR           = "${WORKSPACE}\\artifacts"
-        ENV_FILE                = "${WORKSPACE}\\backend\\.env"
-        DJANGO_SETTINGS_MODULE  = "enterprise_platform.settings"
-        PYTHONIOENCODING        = "utf-8"
-        PYTHONUTF8              = "1"
-        PYTHONDONTWRITEBYTECODE = "1"
-        CI                      = "true"
-
-        // ── Variables qui seront ecrites dans backend/.env ──
-        // Base de donnees PostgreSQL locale
-        DATABASE_URL            = "postgres://postgres@localhost:5432/compliance_db"
-        CONN_MAX_AGE            = "600"
-        DB_NAME                 = "compliance_db"
-        DB_USER                 = "postgres"
-        DB_PASSWORD             = ""
-        DB_HOST                 = "localhost"
-        DB_PORT                 = "5432"
-
-        // Django
-        DJANGO_SECRET_KEY       = "*icm=l80zwu7t$)^in(tu(u7p%yx7@*++3nqb(b6*v1!4j05f@"
-        DEBUG                   = "True"
-        ALLOWED_HOSTS           = "localhost,127.0.0.1"
-        SESSION_COOKIE_SECURE   = "False"
-        CSRF_COOKIE_SECURE      = "False"
-        SECURE_SSL_REDIRECT     = "False"
-        SECURE_HSTS_SECONDS     = "0"
-
-        
-
-        // Jenkins MLOps
-        JENKINS_URL_ENV         = "http://localhost:8089"
-        JENKINS_USER_ENV        = "jenkins_admin"
-        JENKINS_TOKEN_ENV       = "11f2c033cd14e1c2eec21c764c115c4ce1"
-        JENKINS_JOB_NAME_ENV    = "Enterprise-ISO-Compliance"
-        MLOPS_RETRAINING_THRESHOLD = "10"
-        DJANGO_API_URL          = "http://localhost:8000"
+    // ── Options pipeline ────────────────────────────────────────────
+    options {
+        timeout(time: 60, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timestamps()
     }
 
-    // ==========================================================
+    // ════════════════════════════════════════════════════════════════
     stages {
 
-        // ------------------------------------------------------
-        // STAGE 1 - Checkout
-        // Recupere le code source.
-        // ------------------------------------------------------
+        // ────────────────────────────────────────────────────────────
+        // STAGE 1 · Checkout
+        //
+        // Recupere le code source depuis le SCM configure dans Jenkins.
+        // Affiche les 5 derniers commits et le statut git pour
+        // tracabilite et debug.
+        // ────────────────────────────────────────────────────────────
         stage('1 - Checkout') {
             steps {
-                echo "========================================================="
-                echo " Build #${env.BUILD_NUMBER} | Branch: ${env.GIT_BRANCH ?: 'N/A'}"
-                echo " Standard : ${params.STANDARD}"
-                echo "========================================================="
+                echo "[INFO] Checkout du depot - Build #${env.BUILD_NUMBER}"
                 checkout scm
                 bat 'chcp 65001 > nul && git log --oneline -5'
                 bat 'chcp 65001 > nul && git status'
-                // Verifier que Python et Node sont disponibles sur l agent
-                bat 'chcp 65001 > nul && python --version'
-                bat 'chcp 65001 > nul && node --version'
-                bat 'chcp 65001 > nul && npm --version'
-                echo "[OK] Checkout et verification de l environnement termines."
+                echo "[OK] Checkout termine - branche : ${env.GIT_BRANCH ?: 'N/A'}"
             }
         }
 
-        // ------------------------------------------------------
-        // STAGE 2 - Generate Env File
+        // ────────────────────────────────────────────────────────────
+        // STAGE 2 · Install Dependencies
         //
-        // Genere automatiquement backend/.env depuis les
-        // variables definies dans le bloc environment{} ci-dessus.
-        // Aucun credentials Jenkins requis.
-        // Le fichier est supprime dans post { always }.
-        // ------------------------------------------------------
-        stage('2 - Generate Env File') {
+        // Cree ou reutilise le venv Python .venv dans backend/.
+        // Installe toutes les dependances depuis requirements.txt.
+        // Verifie les imports critiques : django, sklearn, joblib, numpy.
+        // ────────────────────────────────────────────────────────────
+        stage('2 - Install Dependencies') {
             steps {
-                script {
- def envContent = """DATABASE_URL=${env.DATABASE_URL}
-CONN_MAX_AGE=${env.CONN_MAX_AGE}
-
-DJANGO_SECRET_KEY=${env.DJANGO_SECRET_KEY}
-DEBUG=${env.DEBUG}
-ALLOWED_HOSTS=${env.ALLOWED_HOSTS}
-SESSION_COOKIE_SECURE=${env.SESSION_COOKIE_SECURE}
-CSRF_COOKIE_SECURE=${env.CSRF_COOKIE_SECURE}
-SECURE_SSL_REDIRECT=${env.SECURE_SSL_REDIRECT}
-SECURE_HSTS_SECONDS=${env.SECURE_HSTS_SECONDS}
-
-JENKINS_URL=${env.JENKINS_URL_ENV}
-JENKINS_USER=${env.JENKINS_USER_ENV}
-JENKINS_TOKEN=${env.JENKINS_TOKEN_ENV}
-JENKINS_JOB_NAME=${env.JENKINS_JOB_NAME_ENV}
-MLOPS_RETRAINING_THRESHOLD=${env.MLOPS_RETRAINING_THRESHOLD}
-DJANGO_API_URL=${env.DJANGO_API_URL}
-
-DB_NAME=${env.DB_NAME}
-DB_USER=${env.DB_USER}
-DB_PASSWORD=${env.DB_PASSWORD}
-DB_HOST=${env.DB_HOST}
-DB_PORT=${env.DB_PORT}
-"""
-                    writeFile(file: "${env.ENV_FILE}", text: envContent, encoding: 'UTF-8')
-                    echo "[OK] backend/.env genere avec succes."
-                    echo "[INFO] Le fichier sera supprime apres le build dans post { always }."
-                }
-            }
-        }
-
-        // ------------------------------------------------------
-        // STAGE 3 - Python Environment
-        // Cree ou reutilise le virtualenv .venv dans backend/.
-        // ------------------------------------------------------
-        stage('3 - Python Environment') {
-            steps {
-                dir("${env.BACKEND_DIR}") {
+                echo "[INFO] Verification et installation des dependances Python..."
+                dir("${BACKEND_DIR}") {
                     bat '''
                         chcp 65001 > nul
                         IF NOT EXIST ".venv\\Scripts\\python.exe" (
                             echo [INFO] Creating Python virtual environment...
                             python -m venv .venv
-                            echo [OK] Virtual environment created.
                         ) ELSE (
                             echo [INFO] Reusing existing virtual environment.
                         )
-                        .venv\\Scripts\\python.exe --version
                     '''
-                }
-                echo "[OK] Python environment ready."
-            }
-        }
-
-        // ------------------------------------------------------
-        // STAGE 4 - Install Backend Dependencies
-        // Installe les dependances pip et verifie les imports.
-        // ------------------------------------------------------
-        stage('4 - Install Backend Dependencies') {
-            steps {
-                dir("${env.BACKEND_DIR}") {
                     bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe -m pip install --upgrade pip --quiet'
                     bat 'chcp 65001 > nul && .venv\\Scripts\\pip.exe install -r requirements.txt --quiet'
-                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe -c "import django; print(\"[OK] django\", django.__version__)"'
-                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe -c "import sklearn; print(\"[OK] sklearn\")"'
-                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe -c "import numpy; print(\"[OK] numpy\")"'
-                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe -c "import joblib; print(\"[OK] joblib\")"'
-                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe -c "import psycopg2; print(\"[OK] psycopg2\")"'
+                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe -c "import django"'
+                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe -c "import sklearn"'
+                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe -c "import joblib"'
+                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe -c "import numpy"'
+                    bat 'echo [OK] Core imports verified'
                 }
-                echo "[OK] Backend dependencies installed."
+                echo "[OK] Dependances installees et verifiees."
             }
         }
 
-        // ------------------------------------------------------
-        // STAGE 5 - Install Frontend Dependencies
-        // Ignore si SKIP_FRONTEND=true.
-        // npm ci utilise package-lock.json pour reproductibilite.
-        // Fallback sur npm install si lock file absent.
-        // ------------------------------------------------------
-        stage('5 - Install Frontend Dependencies') {
-            when {
-                expression { return !params.SKIP_FRONTEND }
-            }
+        // ────────────────────────────────────────────────────────────
+        // STAGE 3 · Django Check & Migrate
+        //
+        // Verifie la configuration Django (manage.py check).
+        // Applique les migrations de base de donnees.
+        // Execute ci/check_django.py pour validation approfondie.
+        // ────────────────────────────────────────────────────────────
+        stage('3 - Django Check') {
             steps {
-                dir("${env.FRONTEND_DIR}") {
-                    bat 'chcp 65001 > nul && npm ci --prefer-offline --no-audit 2>&1 || npm install --no-audit'
-                }
-                echo "[OK] Frontend dependencies installed."
-            }
-        }
-
-        // ------------------------------------------------------
-        // STAGE 6 - Django Check & Migrate
-        // Django lit backend/.env (genere au stage 2) via
-        // python-dotenv. Aucun credentials supplementaire requis.
-        // ------------------------------------------------------
-        stage('6 - Django Check & Migrate') {
-            steps {
-                dir("${env.BACKEND_DIR}") {
+                echo "[INFO] Verification Django et migration de la base de donnees..."
+                dir("${BACKEND_DIR}") {
                     bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe manage.py check'
-                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe manage.py migrate --no-input'
+                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe manage.py migrate'
                     bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe ci\\check_django.py'
                 }
-                echo "[OK] Django check and migration complete."
+                echo "[OK] Django operationnel - base de donnees synchronisee."
             }
         }
 
-        // ------------------------------------------------------
-        // STAGE 7 - Django Tests
-        // --keepdb reutilise la base de test entre les builds.
-        // Un echec partiel n interrompt pas le pipeline (WARN).
-        // ------------------------------------------------------
-        stage('7 - Django Tests') {
+        // ────────────────────────────────────────────────────────────
+        // STAGE 4 · Dataset Validation
+        //
+        // Audite le systeme, synchronise les datasets ISO, remplit
+        // les donnees ML avec fill_ml_datasets.
+        // Scripts : ci/check_dataset.py
+        // Commandes : system_audit, sync_all_datasets, fill_ml_datasets
+        // ────────────────────────────────────────────────────────────
+        stage('4 - Dataset Validation') {
             steps {
-                dir("${env.BACKEND_DIR}") {
-                    bat '''
-                        chcp 65001 > nul
-                        .venv\\Scripts\\python.exe manage.py test api authentication notifications compliance --verbosity=1 --keepdb 2>&1
-                        IF %ERRORLEVEL% NEQ 0 (
-                            echo [WARN] Some Django tests failed - pipeline continues.
-                        )
-                    '''
-                }
-                echo "[OK] Django tests executed."
-            }
-        }
-
-        // ------------------------------------------------------
-        // STAGE 8 - Frontend Build
-        // Compile le bundle React de production.
-        // Ignore si SKIP_FRONTEND=true.
-        // ------------------------------------------------------
-        stage('8 - Frontend Build') {
-            when {
-                expression { return !params.SKIP_FRONTEND }
-            }
-            steps {
-                dir("${env.FRONTEND_DIR}") {
-                    bat 'chcp 65001 > nul && npm run build 2>&1'
-                }
-                echo "[OK] Frontend build complete."
-            }
-        }
-
-        // ------------------------------------------------------
-        // STAGE 9 - Dataset Validation
-        // Synchronise les datasets et verifie le volume minimum
-        // de samples labellises pour l entrainement ML.
-        // ------------------------------------------------------
-        stage('9 - Dataset Validation') {
-            steps {
-                bat 'IF NOT EXIST "%ARTIFACTS_DIR%" mkdir "%ARTIFACTS_DIR%"'
-                dir("${env.BACKEND_DIR}") {
-                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe manage.py system_audit 2>&1 || echo [WARN] system_audit non-zero exit, continuing.'
+                echo "[INFO] Validation du dataset ML (standard=${params.STANDARD})..."
+                dir("${BACKEND_DIR}") {
+                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe manage.py system_audit || echo [WARN] system_audit exited with non-zero but continuing'
                     bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe manage.py sync_all_datasets'
                     script {
                         def forceFlag = params.FORCE_REGEN ? '--force-regen' : ''
@@ -330,114 +165,124 @@ DB_PORT=${env.DB_PORT}
                     }
                     bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe ci\\check_dataset.py'
                 }
-                echo "[OK] Dataset validation complete."
+                echo "[OK] Dataset valide et pret pour l'entrainement."
             }
         }
 
-        // ------------------------------------------------------
-        // STAGE 10 - Security Module Check
-        // Verifie modeles, detecteurs PII/secrets, acces DB
-        // et routing URL du module Document Security.
-        // ------------------------------------------------------
-        stage('10 - Security Module Check') {
+        // ────────────────────────────────────────────────────────────
+        // STAGE 5 · Drift Detection
+        //
+        // Calcule le drift semantique entre donnees historiques et
+        // recentes via TF-IDF cosinus (70% hist / 30% recent).
+        // Produit : artifacts/drift_report.json
+        // Script  : ci/run_drift.py
+        // ────────────────────────────────────────────────────────────
+        stage('5 - Drift Detection') {
             steps {
-                dir("${env.BACKEND_DIR}") {
-                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe ci\\check_security.py'
-                }
-                echo "[OK] Security module check passed."
-            }
-        }
-
-        // ------------------------------------------------------
-        // STAGE 11 - Drift Detection
-        // Calcule le drift semantique (TF-IDF cosinus) pour
-        // toutes les normes. Produit artifacts/drift_report.json.
-        // ------------------------------------------------------
-        stage('11 - Drift Detection') {
-            steps {
-                bat 'IF NOT EXIST "%ARTIFACTS_DIR%" mkdir "%ARTIFACTS_DIR%"'
-                dir("${env.BACKEND_DIR}") {
+                echo "[INFO] Calcul du drift semantique..."
+                bat 'IF NOT EXIST "%WORKSPACE%\\artifacts" mkdir "%WORKSPACE%\\artifacts"'
+                dir("${BACKEND_DIR}") {
                     bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe ci\\run_drift.py'
                 }
-                echo "[OK] Drift detection complete."
+                echo "[OK] Rapport de drift genere dans artifacts/drift_report.json."
             }
             post {
                 always {
-                    archiveArtifacts(
-                        artifacts: 'artifacts/drift_report.json',
-                        allowEmptyArchive: true
-                    )
+                    archiveArtifacts artifacts: 'artifacts/drift_report.json',
+                                     allowEmptyArchive: true
                 }
             }
         }
 
-        // ------------------------------------------------------
-        // STAGE 12 - SonarQube Analysis
-        // Execute depuis la RACINE du workspace pour que
-        // sonar-project.properties soit detecte.
-        // withSonarQubeEnv injecte SONAR_HOST_URL et le token.
-        // Ignore si SKIP_SONAR=true.
+        // ────────────────────────────────────────────────────────────
+        // STAGE 6 · SonarQube Analysis
         //
-        // CORRECTION : env.WORKSPACE utilise a la place d un
-        // chemin en dur pour compatibilite multi-agent.
-        // ------------------------------------------------------
-        stage('12 - SonarQube Analysis') {
+        // Analyse statique du code source (Python + React/JS).
+        // Le scanner est execute depuis la RACINE du workspace afin
+        // que sonar-project.properties soit detecte automatiquement.
+        //
+        // FIX APPLIQUE :
+        //   dir("${WORKSPACE}") force l'execution depuis la racine.
+        //   Sans ce dir(), le scanner herite du working directory
+        //   du stage precedent (backend/) et ne trouve pas
+        //   sonar-project.properties.
+        //
+        // SECURITE :
+        //   withSonarQubeEnv('SonarQube') injecte automatiquement :
+        //     SONAR_HOST_URL  = valeur configuree dans Jenkins
+        //     SONAR_AUTH_TOKEN = credential sonarqube-token
+        //   Aucun token ni URL ne doit apparaitre dans ce fichier.
+        //
+        // CONDITION :
+        //   Le stage est ignore si SKIP_SONAR=true (debug).
+        // ────────────────────────────────────────────────────────────
+        stage('6 - SonarQube Analysis') {
             when {
                 expression { return !params.SKIP_SONAR }
             }
             environment {
-                // CORRECTION : tool() resout le chemin depuis
-                // la configuration Jenkins Tools, pas en dur.
-                SCANNER_HOME = tool(
-                    name: 'SonarScanner',
-                    type: 'hudson.plugins.sonar.SonarRunnerInstallation'
-                )
+                // Resout le chemin d'installation de SonarScanner
+                // depuis l'outil configure dans Manage Jenkins > Tools.
+                // Le nom 'SonarScanner' doit correspondre EXACTEMENT
+                // au nom configure dans Jenkins.
+                SCANNER_HOME = tool name: 'SonarScanner', type: 'hudson.plugins.sonar.SonarRunnerInstallation'
             }
             steps {
-                echo "[INFO] SonarQube Analysis | Build: ${env.BUILD_NUMBER}"
-                echo "[INFO] Scanner path: ${env.SCANNER_HOME}"
-                dir("${env.WORKSPACE}") {
+                echo "[INFO] Lancement de l'analyse SonarQube..."
+                echo "[INFO] Projet : enterprise-iso-compliance | Build : ${env.BUILD_NUMBER}"
+                echo "[INFO] Scanner : ${SCANNER_HOME}"
+
+                // FIX PRINCIPAL : executer depuis la racine du workspace
+                // pour que sonar-project.properties soit trouve.
+                // withSonarQubeEnv injecte SONAR_HOST_URL et SONAR_AUTH_TOKEN.
+                dir("${WORKSPACE}") {
                     withSonarQubeEnv('SonarQube') {
-                        bat "\"${env.SCANNER_HOME}\\bin\\sonar-scanner.bat\" -Dsonar.projectVersion=1.0.${env.BUILD_NUMBER}"
+                        bat "\"${SCANNER_HOME}\\bin\\sonar-scanner.bat\" -Dsonar.projectVersion=1.0.${env.BUILD_NUMBER}"
                     }
                 }
-                echo "[OK] SonarQube analysis submitted."
+                echo "[OK] Analyse SonarQube soumise avec succes."
             }
         }
 
-        // ------------------------------------------------------
-        // STAGE 13 - Quality Gate
-        // Attend le resultat via webhook SonarQube.
-        // abortPipeline:true = echec si QG = FAILED.
-        // Timeout 10 minutes pour eviter un blocage indefini.
-        // Ignore si SKIP_SONAR=true.
-        // ------------------------------------------------------
-        stage('13 - Quality Gate') {
+        // ────────────────────────────────────────────────────────────
+        // STAGE 7 · Quality Gate
+        //
+        // Attend le resultat du Quality Gate SonarQube.
+        // Le plugin SonarQube Scanner pour Jenkins recupere le resultat
+        // via le webhook configure dans SonarQube :
+        //   Administration > Configuration > Webhooks
+        //   URL : http://JENKINS_URL/sonarqube-webhook/
+        //
+        // abortPipeline:true = le pipeline echoue si QG = FAILED.
+        // Timeout de 10 minutes pour eviter un blocage indefini.
+        //
+        // CONDITION : ignore si SKIP_SONAR=true.
+        // ────────────────────────────────────────────────────────────
+        stage('7 - Quality Gate') {
             when {
                 expression { return !params.SKIP_SONAR }
             }
             steps {
-                echo "[INFO] Waiting for SonarQube Quality Gate (timeout: 10 min)..."
+                echo "[INFO] Attente du Quality Gate SonarQube (timeout 10 min)..."
                 timeout(time: 10, unit: 'MINUTES') {
                     waitForQualityGate abortPipeline: true
                 }
-                echo "[OK] Quality Gate passed."
+                echo "[OK] Quality Gate passe avec succes."
             }
         }
 
-        // ------------------------------------------------------
-        // STAGE 14 - ML Training
-        // Entraine RandomForest, LogisticRegression,
-        // GradientBoosting, BiLSTM pour les standards choisis.
-        // Ignore si SKIP_TRAINING=true.
-        // ------------------------------------------------------
-        stage('14 - ML Training') {
-            when {
-                expression { return !params.SKIP_TRAINING }
-            }
+        // ────────────────────────────────────────────────────────────
+        // STAGE 8 · ML Training
+        //
+        // Entraine les modeles ML (RandomForest, LogisticRegression,
+        // GradientBoosting, BiLSTM) pour les standards selectionnes.
+        // Script : ci/train_standard.py <STANDARD>
+        // Source  : ml/train_models.py -> train_all_models()
+        // ────────────────────────────────────────────────────────────
+        stage('8 - ML Training') {
             steps {
-                echo "[INFO] ML Training - Standard: ${params.STANDARD}"
-                dir("${env.BACKEND_DIR}") {
+                echo "[INFO] Entrainement ML - standard=${params.STANDARD}..."
+                dir("${BACKEND_DIR}") {
                     script {
                         def std = params.STANDARD
                         if (std == 'ALL' || std == 'ISO9001') {
@@ -454,128 +299,79 @@ DB_PORT=${env.DB_PORT}
                         }
                     }
                 }
-                echo "[OK] ML Training complete."
+                echo "[OK] Entrainement ML termine."
             }
         }
 
-        // ------------------------------------------------------
-        // STAGE 15 - Export Metrics
-        // Exporte les metriques Prometheus et l evaluation
-        // summary depuis les *_metrics.json.
-        // Produit :
+        // ────────────────────────────────────────────────────────────
+        // STAGE 9 · Export Metriques
+        //
+        // Exporte les metriques d'evaluation vers :
         //   artifacts/prometheus_metrics.txt
         //   artifacts/evaluation_summary.json
-        // Ignore si SKIP_TRAINING=true.
-        // ------------------------------------------------------
-        stage('15 - Export Metrics') {
-            when {
-                expression { return !params.SKIP_TRAINING }
-            }
+        //   artifacts/drift_report.json
+        // Script : ci/export_metrics.py
+        // ────────────────────────────────────────────────────────────
+        stage('9 - Export Metriques') {
             steps {
-                bat 'IF NOT EXIST "%ARTIFACTS_DIR%" mkdir "%ARTIFACTS_DIR%"'
-                dir("${env.BACKEND_DIR}") {
+                echo "[INFO] Export des metriques ML et Prometheus..."
+                bat 'IF NOT EXIST "%WORKSPACE%\\artifacts" mkdir "%WORKSPACE%\\artifacts"'
+                dir("${BACKEND_DIR}") {
                     bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe ci\\export_metrics.py'
                 }
-                echo "[OK] Metrics exported to artifacts/."
+                echo "[OK] Metriques exportees dans artifacts/."
             }
             post {
                 always {
-                    archiveArtifacts(
-                        artifacts: 'artifacts/prometheus_metrics.txt,artifacts/evaluation_summary.json',
-                        allowEmptyArchive: true
-                    )
+                    archiveArtifacts artifacts: 'artifacts/prometheus_metrics.txt,artifacts/evaluation_summary.json,artifacts/drift_report.json',
+                                     allowEmptyArchive: true
                 }
             }
         }
 
-        // ------------------------------------------------------
-        // STAGE 16 - TrainingJob Update
-        // Enregistre les TrainingJob en base de donnees depuis
-        // les *_metrics.json. Ignore si SKIP_TRAINING=true.
-        // ------------------------------------------------------
-        stage('16 - TrainingJob Update') {
-            when {
-                expression { return !params.SKIP_TRAINING }
-            }
+        // ────────────────────────────────────────────────────────────
+        // STAGE 10 · TrainingJob Update
+        //
+        // Met a jour l'enregistrement TrainingJob en base de donnees
+        // avec les metriques du pipeline (F1, accuracy, drift, version).
+        // Script : ci/update_training_job.py
+        // ────────────────────────────────────────────────────────────
+        stage('10 - TrainingJob Update') {
             steps {
-                dir("${env.BACKEND_DIR}") {
+                echo "[INFO] Mise a jour du TrainingJob en base de donnees..."
+                dir("${BACKEND_DIR}") {
                     bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe ci\\update_training_job.py'
                 }
-                echo "[OK] TrainingJob records updated in database."
+                echo "[OK] TrainingJob mis a jour."
             }
         }
 
-        // ------------------------------------------------------
-        // STAGE 17 - Archive Artifacts
-        // Archive tous les artefacts du build avec fingerprint
-        // pour tracabilite et reproductibilite.
-        // ------------------------------------------------------
-        stage('17 - Archive Artifacts') {
+        // ────────────────────────────────────────────────────────────
+        // STAGE 11 · Cleanup
+        //
+        // Supprime les repertoires __pycache__ generes durant le build
+        // pour maintenir un espace de travail propre entre les builds.
+        // ────────────────────────────────────────────────────────────
+        stage('11 - Cleanup') {
             steps {
-                archiveArtifacts(
-                    artifacts: 'artifacts/**/*',
-                    allowEmptyArchive: true,
-                    fingerprint: true
-                )
-                echo "[OK] Artifacts archived."
-            }
-        }
-
-        // ------------------------------------------------------
-        // STAGE 18 - Cleanup
-        // Supprime __pycache__ et les fichiers .pyc/.pyo.
-        // NOTE : la suppression du .env est dans post { always }
-        // pour garantir son execution meme en cas d echec.
-        // ------------------------------------------------------
-        stage('18 - Cleanup') {
-            steps {
+                echo "[INFO] Nettoyage des fichiers cache Python..."
                 bat '''
                     chcp 65001 > nul
                     echo [INFO] Cleaning Python cache files...
                     FOR /R "%WORKSPACE%" %%D IN (__pycache__) DO (
                         IF EXIST "%%D" RMDIR /S /Q "%%D" 2>nul
                     )
-                    FOR /R "%WORKSPACE%" %%F IN (*.pyc *.pyo) DO (
-                        IF EXIST "%%F" DEL /Q "%%F" 2>nul
-                    )
                     echo [OK] Cleanup done.
                 '''
-                echo "[OK] Workspace cleaned."
+                echo "[OK] Workspace nettoye."
             }
         }
 
     }
-    // ==========================================================
+    // ════════════════════════════════════════════════════════════════
 
-    // ----------------------------------------------------------
-    // Post-build actions
-    //
-    // SECURITE - always :
-    //   Le fichier backend/.env genere au stage 2 est SUPPRIME
-    //   ici systematiquement, que le build reussisse ou echoue.
-    //   Cela garantit que les secrets ne persistent pas sur
-    //   l agent Jenkins apres le build.
-    // ----------------------------------------------------------
+    // ── Post-build actions ──────────────────────────────────────────
     post {
-
-        always {
-            script {
-                // CORRECTION SECURITE : suppression systematique
-                // du .env genere, meme en cas d echec du pipeline.
-                // Ne pas utiliser bat() car il echoue si le fichier
-                // n existe pas (ex: build echoue avant stage 2).
-                try {
-                    if (fileExists("${env.ENV_FILE}")) {
-                        bat "DEL /Q \"${env.ENV_FILE}\" 2>nul"
-                        echo "[OK] backend/.env supprime de l agent Jenkins."
-                    }
-                } catch (Exception e) {
-                    echo "[WARN] Impossible de supprimer backend/.env : ${e.message}"
-                }
-            }
-            echo "[INFO] Pipeline finished - Build #${env.BUILD_NUMBER} | Duration: ${currentBuild.durationString}"
-        }
-
         success {
             echo "========================================================="
             echo " Pipeline SUCCESS"
@@ -583,24 +379,21 @@ DB_PORT=${env.DB_PORT}
             echo " Standard  : ${params.STANDARD}"
             echo " Branch    : ${env.GIT_BRANCH ?: 'N/A'}"
             echo " SonarQube : ${params.SKIP_SONAR ? 'SKIPPED' : 'PASSED'}"
-            echo " Training  : ${params.SKIP_TRAINING ? 'SKIPPED' : 'DONE'}"
             echo "========================================================="
         }
-
         failure {
             echo "========================================================="
             echo " Pipeline FAILED"
             echo " Build     : #${env.BUILD_NUMBER}"
             echo " Standard  : ${params.STANDARD}"
-            echo " Consulter les logs du stage en echec ci-dessus."
+            echo " Consulter les logs ci-dessus pour identifier le stage en echec."
             echo "========================================================="
         }
-
         unstable {
-            echo "[WARN] Pipeline UNSTABLE - Build #${env.BUILD_NUMBER}"
-            echo "[WARN] Verifier les tests Django et le Quality Gate."
+            echo "[WARN] Pipeline UNSTABLE - Build #${env.BUILD_NUMBER} | Verifier les tests et le Quality Gate."
         }
-
+        always {
+            echo "[INFO] Pipeline termine - Build #${env.BUILD_NUMBER} | Duree : ${currentBuild.durationString}"
+        }
     }
-
 }
