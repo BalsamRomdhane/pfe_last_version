@@ -2996,93 +2996,15 @@ def compliance_chat_api(request):
     except (TypeError, ValueError):
         top_k = 5
 
-    # Step 1: Semantic search in evidence index
-    evidences = []
-    try:
-        from ml.search import load_evidence_index, embed_query_vector
-        import numpy as np
-        from sklearn.metrics.pairwise import cosine_similarity as cos_sim
+    # OPTIMISE: cache Django 60s + _retrieve_evidences (cache FAISS + LRU embeddings)
+    _cache_key = f'chat::{abs(hash(question))}::{standard}::{top_k}'
+    _cached = cache.get(_cache_key)
+    if _cached is not None:
+        return Response(_cached)
 
-        index, ids, vectorizer, vectors, meta = load_evidence_index()
-        qvec = embed_query_vector(
-            question,
-            model_name=meta.get('embedding_model') if meta else None,
-            vectorizer=vectorizer,
-        )
+    from api.chat_optimized import _retrieve_evidences
+    evidences = _retrieve_evidences(question, standard, top_k)
 
-        if qvec is not None:
-            q = np.asarray(qvec, dtype=np.float32)
-            if index is not None and getattr(index, 'ntotal', 0) > 0:
-                distances, indices = index.search(q, min(top_k, index.ntotal))
-                hits = [
-                    {'id': ids[idx], 'score': float(d)}
-                    for dist_row, idx_row in zip(distances.tolist(), indices.tolist())
-                    for d, idx in zip(dist_row, idx_row)
-                    if idx >= 0 and idx < len(ids)
-                ]
-            elif vectorizer is not None and vectors is not None:
-                if q.ndim == 1:
-                    q = q.reshape(1, -1)
-                sims = cos_sim(q, vectors.astype(np.float32))[0]
-                top_idx = np.argsort(sims)[::-1][:top_k]
-                hits = [{'id': ids[i], 'score': float(sims[i])} for i in top_idx]
-            else:
-                hits = []
-
-            # Fetch samples
-            if hits:
-                sample_ids = [h['id'] for h in hits]
-                score_map = {h['id']: h['score'] for h in hits}
-                samples = RuleTrainingSample.objects.filter(id__in=sample_ids).select_related('rule')
-                for s in samples:
-                    evidences.append({
-                        'rule': s.rule_title or (s.rule.title if s.rule else ''),
-                        'evidence': s.evidence_text or '',
-                        'decision': s.label,
-                        'score': round(max(0.0, min(1.0, score_map.get(s.id, 0))) * 100),
-                    })
-    except Exception as e:
-        logger.warning('Chat evidence search failed: %s', str(e))
-
-    # Step 2: Keyword fallback â€” search RuleTrainingSample text
-    if len(evidences) < 3:
-        from django.db.models import Q as DQ
-        # Search with multiple keywords from the question
-        words = [w for w in question[:80].split() if len(w) > 3]
-        q_filter = DQ()
-        for w in words[:5]:
-            q_filter |= (
-                DQ(evidence_text__icontains=w) |
-                DQ(rule_title__icontains=w) |
-                DQ(reviewer_comment__icontains=w)
-            )
-        qs = RuleTrainingSample.objects.filter(q_filter).order_by('-confidence_score')[:top_k]
-        seen_ids = {e.get('id') for e in evidences}
-        for s in qs:
-            if s.id not in seen_ids:
-                evidences.append({
-                    'id':       s.id,
-                    'rule':     s.rule_title or '',
-                    'evidence': s.evidence_text or '',
-                    'decision': s.label,
-                    'score':    50,
-                })
-
-    # Step 2b: If still no evidence, get top approved samples for the standard
-    if len(evidences) < 2:
-        std_qs = RuleTrainingSample.objects.filter(label='approved')
-        if standard:
-            std_qs = std_qs.filter(norm__name__icontains=standard)
-        for s in std_qs.order_by('-confidence_score')[:top_k]:
-            evidences.append({
-                'id':       s.id,
-                'rule':     s.rule_title or '',
-                'evidence': s.evidence_text or '',
-                'decision': s.label,
-                'score':    40,
-            })
-
-    # Step 3: Generate answer via RAG + LLM (Ollama) or keyword fallback
     from services.llm_service import generate_compliance_answer
     result = generate_compliance_answer(
         question=question,
@@ -3091,7 +3013,7 @@ def compliance_chat_api(request):
         user=getattr(request.user, 'username', 'anonymous'),
     )
 
-    return Response({
+    payload = {
         'question':     question,
         'answer':       result['answer'],
         'sources':      evidences[:top_k],
@@ -3100,7 +3022,9 @@ def compliance_chat_api(request):
         'llm_used':     result.get('llm_used', False),
         'model':        result.get('model', 'fallback'),
         'confidence':   result.get('confidence', 'Moyenne'),
-    })
+    }
+    cache.set(_cache_key, payload, timeout=60)
+    return Response(payload)
 
 
 # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -3134,81 +3058,8 @@ def compliance_chat_stream_api(request):
         top_k = 5
 
     # â”€â”€ Retrieve evidence (same logic as compliance_chat_api) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    evidences = []
-    try:
-        from ml.search import load_evidence_index, embed_query_vector
-        import numpy as np
-        from sklearn.metrics.pairwise import cosine_similarity as cos_sim
-
-        index, ids, vectorizer, vectors, meta = load_evidence_index()
-        qvec = embed_query_vector(
-            question,
-            model_name=meta.get('embedding_model') if meta else None,
-            vectorizer=vectorizer,
-        )
-        if qvec is not None:
-            q = np.asarray(qvec, dtype=np.float32)
-            if index is not None and getattr(index, 'ntotal', 0) > 0:
-                distances, indices_arr = index.search(q, min(top_k, index.ntotal))
-                hits = [
-                    {'id': ids[idx], 'score': float(d)}
-                    for dist_row, idx_row in zip(distances.tolist(), indices_arr.tolist())
-                    for d, idx in zip(dist_row, idx_row)
-                    if idx >= 0 and idx < len(ids)
-                ]
-            elif vectorizer is not None and vectors is not None:
-                if q.ndim == 1:
-                    q = q.reshape(1, -1)
-                sims = cos_sim(q, vectors.astype(np.float32))[0]
-                top_idx = np.argsort(sims)[::-1][:top_k]
-                hits = [{'id': ids[i], 'score': float(sims[i])} for i in top_idx]
-            else:
-                hits = []
-            if hits:
-                sample_ids = [h['id'] for h in hits]
-                score_map  = {h['id']: h['score'] for h in hits}
-                samples = RuleTrainingSample.objects.filter(id__in=sample_ids).select_related('rule')
-                for s in samples:
-                    evidences.append({
-                        'rule':     s.rule_title or (s.rule.title if s.rule else ''),
-                        'evidence': s.evidence_text or '',
-                        'decision': s.label,
-                        'score':    round(max(0.0, min(1.0, score_map.get(s.id, 0))) * 100),
-                    })
-    except Exception as e:
-        logger.warning('Stream evidence search failed: %s', e)
-
-    # Keyword fallback
-    if len(evidences) < 3:
-        from django.db.models import Q as DQ
-        words = [w for w in question[:80].split() if len(w) > 3]
-        q_filter = DQ()
-        for w in words[:5]:
-            q_filter |= (
-                DQ(evidence_text__icontains=w) |
-                DQ(rule_title__icontains=w) |
-                DQ(reviewer_comment__icontains=w)
-            )
-        qs = RuleTrainingSample.objects.filter(q_filter).order_by('-confidence_score')[:top_k]
-        seen_ids = {e.get('id') for e in evidences}
-        for s in qs:
-            if s.id not in seen_ids:
-                evidences.append({
-                    'id': s.id, 'rule': s.rule_title or '',
-                    'evidence': s.evidence_text or '', 'decision': s.label, 'score': 50,
-                })
-
-    if len(evidences) < 2:
-        std_qs = RuleTrainingSample.objects.filter(label='approved')
-        if standard:
-            std_qs = std_qs.filter(norm__name__icontains=standard)
-        for s in std_qs.order_by('-confidence_score')[:top_k]:
-            evidences.append({
-                'id': s.id, 'rule': s.rule_title or '',
-                'evidence': s.evidence_text or '', 'decision': s.label, 'score': 40,
-            })
-
-    # â”€â”€ Stream â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    from api.chat_optimized import _retrieve_evidences
+    evidences = _retrieve_evidences(question, standard, top_k)
     import json as _json
     _user = getattr(request.user, 'username', 'anonymous')
 

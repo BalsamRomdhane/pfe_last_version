@@ -586,4 +586,11 @@ def get_prometheus_metrics() -> str:
     except Exception:
         logger.warning('get_prometheus_metrics: security metrics unavailable (app not migrated yet)')
 
+    # ── Chat pipeline metrics ──────────────────────────────────────────────
+    try:
+        from services.chat_metrics import generate_prometheus_lines as _chat_lines
+        lines.append(_chat_lines())
+    except Exception:
+        pass
+
     return '\n'.join(lines)
