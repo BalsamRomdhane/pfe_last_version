@@ -1,6 +1,8 @@
 import os
 import re
 import pickle
+import threading
+import time
 from datetime import timezone
 
 import numpy as np
@@ -22,8 +24,20 @@ from api.utils import RULE_KEYWORDS, extract_document_text, normalize_text
 
 EMBEDDING_MODEL_NAME = 'all-MiniLM-L6-v2'
 
-# ── Singleton cache — avoids reloading 80MB model on every API request ──────
+# ── Singleton cache — modèle ST chargé une seule fois par process ────────────
 _MODEL_CACHE: dict = {}
+
+# ── Cache FAISS en mémoire ─────────────────────────────────────────────────
+# Évite de relire les fichiers FAISS depuis le disque à chaque requête chat.
+# Structure : (index, ids, vectorizer, vectors, meta, mtime)
+_EVIDENCE_INDEX_CACHE: tuple | None = None
+_EVIDENCE_INDEX_LOCK  = threading.Lock()
+_EVIDENCE_INDEX_MTIME: float = 0.0   # mtime du fichier .faiss — invalide le cache si modifié
+
+# Cache LRU des vecteurs de requête (question → vecteur)
+# Évite de recalculer l'embedding pour des questions répétées (suggestions, retry).
+_QUERY_VECTOR_CACHE: dict = {}
+_QUERY_VECTOR_CACHE_MAX = 128
 
 
 def _get_sentence_transformer(model_name: str = EMBEDDING_MODEL_NAME):
@@ -307,6 +321,8 @@ def build_and_persist_evidence_index(standard=None, norme_id=None, model_name=EM
             # write metadata
             with open(meta_path, 'w', encoding='utf-8') as fh:
                 json.dump(meta, fh, indent=2)
+            # Invalider le cache en mémoire après rebuild
+            invalidate_evidence_index_cache()
             return meta
         except Exception as e:
             raise RuntimeError(f'Failed to build or persist FAISS index: {e}')
@@ -316,6 +332,8 @@ def build_and_persist_evidence_index(standard=None, norme_id=None, model_name=EM
         meta['last_trained'] = tz.now().isoformat()
         with open(meta_path, 'w', encoding='utf-8') as fh:
             json.dump(meta, fh, indent=2)
+        # Invalider le cache en mémoire après rebuild
+        invalidate_evidence_index_cache()
         return meta
 
 
@@ -330,79 +348,134 @@ def load_evidence_index_metadata():
 
 
 def load_evidence_index():
-    """Load persisted FAISS index, ids list and metadata."""
+    """
+    Load FAISS index, ids, vectorizer, vectors et metadata.
+
+    OPTIMISATION : cache en mémoire process-level avec invalidation par mtime.
+    - Première lecture : charge depuis disque (~180ms)
+    - Requêtes suivantes : retourne le tuple en cache (~0.1ms)
+    - Invalidation automatique si le fichier .faiss est modifié (rebuild index)
+    """
+    global _EVIDENCE_INDEX_CACHE, _EVIDENCE_INDEX_MTIME
+
     models_dir = os.path.join(os.path.dirname(__file__), 'models')
     index_path = os.path.join(models_dir, 'evidence_index.faiss')
     ids_path = os.path.join(models_dir, 'evidence_index_ids.json')
     vec_path = os.path.join(models_dir, 'evidence_vectorizer.pkl')
     vec_matrix_path = os.path.join(models_dir, 'evidence_vectors.npy')
-    meta = load_evidence_index_metadata()
 
-    if meta is None or not os.path.exists(ids_path):
-        raise RuntimeError('Persisted evidence index not found')
+    # Détecter si les fichiers ont changé depuis le dernier chargement
+    try:
+        current_mtime = os.path.getmtime(ids_path) if os.path.exists(ids_path) else 0.0
+    except OSError:
+        current_mtime = 0.0
 
-    if not os.path.exists(index_path) and not os.path.exists(vec_matrix_path):
-        raise RuntimeError('Persisted evidence index not found')
+    with _EVIDENCE_INDEX_LOCK:
+        if _EVIDENCE_INDEX_CACHE is not None and current_mtime == _EVIDENCE_INDEX_MTIME:
+            # Cache valide — retour immédiat sans I/O disque
+            return _EVIDENCE_INDEX_CACHE
 
-    # Load ids
-    import json
-    with open(ids_path, 'r', encoding='utf-8') as fh:
-        ids = json.load(fh)
+        # Cache invalide ou absent — charger depuis disque
+        meta = load_evidence_index_metadata()
 
-    # Load FAISS index if available
-    if FAISS_AVAILABLE and os.path.exists(index_path):
-        try:
-            index = faiss.read_index(index_path)
-        except Exception:
-            index = None
-    else:
+        if meta is None or not os.path.exists(ids_path):
+            raise RuntimeError('Persisted evidence index not found')
+
+        if not os.path.exists(index_path) and not os.path.exists(vec_matrix_path):
+            raise RuntimeError('Persisted evidence index not found')
+
+        import json
+        with open(ids_path, 'r', encoding='utf-8') as fh:
+            ids = json.load(fh)
+
+        # Charger l'index FAISS
         index = None
+        if FAISS_AVAILABLE and os.path.exists(index_path):
+            try:
+                index = faiss.read_index(index_path)
+            except Exception:
+                index = None
 
-    # Load TF-IDF vectorizer if present
-    vectorizer = None
-    if os.path.exists(vec_path):
-        try:
-            with open(vec_path, 'rb') as fh:
-                vectorizer = pickle.load(fh)
-        except Exception:
-            vectorizer = None
+        # Charger le vectorizer TF-IDF de fallback
+        vectorizer = None
+        if os.path.exists(vec_path):
+            try:
+                with open(vec_path, 'rb') as fh:
+                    vectorizer = pickle.load(fh)
+            except Exception:
+                vectorizer = None
 
-    vectors = None
-    if os.path.exists(vec_matrix_path):
-        try:
-            vectors = np.load(vec_matrix_path)
-        except Exception:
-            vectors = None
+        # Charger la matrice de vecteurs
+        vectors = None
+        if os.path.exists(vec_matrix_path):
+            try:
+                vectors = np.load(vec_matrix_path)
+            except Exception:
+                vectors = None
 
-    return index, ids, vectorizer, vectors, meta
+        result = (index, ids, vectorizer, vectors, meta)
+        _EVIDENCE_INDEX_CACHE = result
+        _EVIDENCE_INDEX_MTIME = current_mtime
+        return result
+
+
+def invalidate_evidence_index_cache() -> None:
+    """Forcer le rechargement de l'index au prochain appel (après rebuild)."""
+    global _EVIDENCE_INDEX_CACHE, _EVIDENCE_INDEX_MTIME
+    with _EVIDENCE_INDEX_LOCK:
+        _EVIDENCE_INDEX_CACHE = None
+        _EVIDENCE_INDEX_MTIME = 0.0
 
 
 def embed_query_vector(text, model_name=EMBEDDING_MODEL_NAME, vectorizer=None):
-    """Return a numpy float32 vector for the given text.
+    """
+    Return a numpy float32 vector for the given text.
+
+    OPTIMISATION : cache LRU sur la question normalisée.
+    La même question posée deux fois (retry, suggestion) ne recalcule pas l'embedding.
+    Cache limité à 128 entrées pour éviter une fuite mémoire.
 
     Uses sentence-transformers if available, otherwise uses provided TF-IDF vectorizer.
     """
     if not text:
         return None
 
+    # Clé de cache = texte normalisé + nom du modèle
+    norm = normalize_text(text)
+    cache_key = f'{model_name}::{norm[:200]}'
+
+    if cache_key in _QUERY_VECTOR_CACHE:
+        return _QUERY_VECTOR_CACHE[cache_key]
+
+    result = None
+
     if SENTENCE_TRANSFORMERS_AVAILABLE:
         try:
-            model = _get_sentence_transformer(model_name)  # use cached singleton
-            vec = model.encode([normalize_text(text)], convert_to_numpy=True, normalize_embeddings=True)
-            return np.asarray(vec, dtype=np.float32)
+            model = _get_sentence_transformer(model_name)
+            vec = model.encode([norm], convert_to_numpy=True, normalize_embeddings=True)
+            result = np.asarray(vec, dtype=np.float32)
         except Exception:
             pass
 
-    if vectorizer is not None:
+    if result is None and vectorizer is not None:
         try:
             mat = vectorizer.transform([text])
-            return np.asarray(mat.toarray(), dtype=np.float32)
+            result = np.asarray(mat.toarray(), dtype=np.float32)
         except Exception:
             pass
 
-    # Last resort: simple token-count vector (very weak)
-    tokens = normalize_text(text).split()
-    vec = np.zeros((1, 128), dtype=np.float32)
-    for i, t in enumerate(tokens[:128]):
-        vec[0, i] = len(t)
-    return vec
+    if result is None:
+        # Fallback ultime : vecteur de comptage de tokens (très faible qualité)
+        tokens = norm.split()
+        vec = np.zeros((1, 128), dtype=np.float32)
+        for i, t in enumerate(tokens[:128]):
+            vec[0, i] = len(t)
+        result = vec
+
+    # Stocker dans le cache LRU (FIFO si dépassement)
+    if len(_QUERY_VECTOR_CACHE) >= _QUERY_VECTOR_CACHE_MAX:
+        oldest_key = next(iter(_QUERY_VECTOR_CACHE))
+        del _QUERY_VECTOR_CACHE[oldest_key]
+    _QUERY_VECTOR_CACHE[cache_key] = result
+
+    return result

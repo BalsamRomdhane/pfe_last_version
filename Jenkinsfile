@@ -142,11 +142,14 @@ pipeline {
                     bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe ci\\check_django.py'
                 }
                 echo "[OK] Django operationnel - base de donnees synchronisee."
+            }
+        }
+
         // ────────────────────────────────────────────────────────────
         // STAGE 3.5 - Django Tests
         //
         // Suite de tests unitaires avant SonarQube et training.
-        // Utilise --keepdb pour accélérer les runs successifs.
+        // Utilise --keepdb pour accelerer les runs successifs.
         // ────────────────────────────────────────────────────────────
         stage('3.5 - Django Tests') {
             steps {
@@ -158,8 +161,6 @@ pipeline {
                     '''
                 }
                 echo "[OK] Tests Django termines."
-            }
-        }
             }
         }
 

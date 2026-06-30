@@ -1354,90 +1354,258 @@ const SUGGESTIONS = [
   'Comment améliorer le score de conformité ?',
 ];
 
+/* ── Hook SSE streaming ──────────────────────────────────────────────────────
+   Gère la connexion SSE vers /compliance/chat/stream/
+   Retourne { streamText, sources, streaming, phase, startStream, abortStream }
+   - Premier token affiché dès réception (TTFT visible)
+   - Sources affichées avant les tokens (frame sources envoyé en premier par le backend)
+   - AbortController pour annuler proprement
+─────────────────────────────────────────────────────────────────────────── */
+function useChatStream() {
+  const [streamText, setStreamText]   = useState('');
+  const [sources,    setSources]      = useState([]);
+  const [streaming,  setStreaming]    = useState(false);
+  const [phase,      setPhase]        = useState(''); // 'searching' | 'generating' | ''
+  const [model,      setModel]        = useState('');
+  const abortRef = useRef(null);
+
+  const abortStream = useCallback(() => {
+    if (abortRef.current) { abortRef.current.abort(); abortRef.current = null; }
+    setStreaming(false);
+    setPhase('');
+  }, []);
+
+  const startStream = useCallback(async ({ question, standard, top_k = 5, token }) => {
+    // Annuler un stream précédent s'il est en cours
+    abortStream();
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setStreamText('');
+    setSources([]);
+    setModel('');
+    setStreaming(true);
+    setPhase('searching');
+
+    const apiBase = process.env.REACT_APP_API_URL || 'http://localhost:8000/api';
+
+    try {
+      const resp = await fetch(`${apiBase}/compliance/chat/stream/`, {
+        method:  'POST',
+        headers: {
+          'Content-Type':  'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body:   JSON.stringify({ question, standard, top_k }),
+        signal: controller.signal,
+      });
+
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+      setPhase('generating');
+      const reader  = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let   buffer  = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';   // conserver la ligne incomplète
+
+        for (const line of lines) {
+          if (!line.startsWith('data:')) continue;
+          const raw = line.slice(5).trim();
+          if (!raw) continue;
+
+          try {
+            const chunk = JSON.parse(raw);
+
+            // Frame 1 — sources + métadonnées (envoyé avant les tokens)
+            if (chunk.sources !== undefined) {
+              setSources(chunk.sources ?? []);
+              continue;
+            }
+            // Frame done — fin du stream
+            if (chunk.done) {
+              if (chunk.model) setModel(chunk.model);
+              break;
+            }
+            // Token SSE
+            if (typeof chunk === 'string') {
+              setStreamText(prev => prev + chunk);
+            } else if (chunk.token !== undefined) {
+              setStreamText(prev => prev + chunk.token);
+            } else if (chunk.response !== undefined) {
+              setStreamText(prev => prev + chunk.response);
+            }
+          } catch {
+            // token brut non-JSON (Ollama envoie parfois du texte pur)
+            setStreamText(prev => prev + raw);
+          }
+        }
+      }
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        setStreamText('Erreur de connexion au serveur. Veuillez réessayer.');
+      }
+    } finally {
+      abortRef.current = null;
+      setStreaming(false);
+      setPhase('');
+    }
+  }, [abortStream]);
+
+  return { streamText, sources, streaming, phase, model, startStream, abortStream };
+}
+
+/* ── Composant bulle de message IA avec curseur clignotant pendant le stream ─ */
+const AiMessageBubble = React.memo(function AiMessageBubble({ msg, isStreaming }) {
+  return (
+    <div className="max-w-[80%] rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 shadow-sm">
+      <p className="whitespace-pre-wrap leading-relaxed">
+        {msg.content}
+        {isStreaming && (
+          <motion.span
+            animate={{ opacity: [1, 0, 1] }}
+            transition={{ repeat: Infinity, duration: 0.8 }}
+            className="ml-0.5 inline-block h-4 w-0.5 bg-violet-500 align-middle"
+          />
+        )}
+      </p>
+      {msg.sources?.length > 0 && (
+        <div className="mt-3 pt-2 border-t border-slate-100">
+          <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">Sources utilisées</p>
+          <div className="space-y-1">
+            {msg.sources.slice(0, 3).map((src, j) => (
+              <div key={j} className="flex items-center gap-1.5 text-[10px]">
+                <span className={`rounded-full px-1.5 py-0.5 font-semibold ${src.decision === 'approved' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
+                  {src.decision}
+                </span>
+                <span className="text-slate-500 truncate">{src.rule}</span>
+                {src.score != null && <span className="text-sky-600 font-semibold ml-auto">{src.score}%</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <div className="flex items-center justify-between mt-1 gap-2">
+        <p className="text-[10px] opacity-50">{fmt(msg.timestamp)}</p>
+        {msg.model && <span className="text-[10px] opacity-50">{msg.model}</span>}
+        {msg.confidence && <span className="text-[10px] opacity-50">conf: {msg.confidence}</span>}
+      </div>
+    </div>
+  );
+});
+
 function AssistantTab({ llmAvailable, standards }) {
-  const [messages, setMessages] = useState([]);
-  const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [standard, setStandard] = useState('');
-  const [history, setHistory] = useState(() => {
+  const [messages,    setMessages]    = useState([]);
+  const [input,       setInput]       = useState('');
+  const [standard,    setStandard]    = useState('');
+  const [history,     setHistory]     = useState(() => {
     try { return JSON.parse(localStorage.getItem('ai_chat_history') || '[]'); } catch { return []; }
   });
   const [showHistory, setShowHistory] = useState(false);
-  const [streaming, setStreaming] = useState(false); // eslint-disable-line no-unused-vars
-  const [streamStatus, setStreamStatus] = useState('');
   const messagesEndRef = useRef(null);
 
+  // Récupérer le token JWT depuis localStorage (même source que api.js)
+  const token = localStorage.getItem('token') || '';
+
+  const {
+    streamText, sources, streaming, phase, model: streamModel,
+    startStream, abortStream,
+  } = useChatStream();
+
+  // Scroll automatique à chaque token reçu
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, streamStatus]);
+  }, [messages, streamText]);
 
-  const saveToHistory = (q, a) => {
-    const entry = { id: Date.now(), question: q, answer: a, timestamp: new Date().toISOString(), standard };
-    const next = [entry, ...history].slice(0, 30);
-    setHistory(next);
-    localStorage.setItem('ai_chat_history', JSON.stringify(next));
-  };
-
-  const handleSend = async (question) => {
-    const q = (question || input).trim();
-    if (!q) return;
-    setInput('');
-    setStreamStatus('Thinking...');
-    setLoading(true);
-
-    const userMsg = { role: 'user', content: q, timestamp: new Date().toISOString() };
-    setMessages(prev => [...prev, userMsg]);
-
-    try {
-      setStreamStatus('Searching knowledge...');
-      await new Promise(r => setTimeout(r, 300));
-      setStreamStatus('Generating answer...');
-
-      const r = await api.post('/compliance/chat/', { question: q, standard, top_k: 7 });
-      const answer = r.data?.answer || r.data?.response || JSON.stringify(r.data);
-      const sources = r.data?.sources ?? [];
-      const model = r.data?.model;
-      const confidence = r.data?.confidence;
-
-      const aiMsg = {
-        role: 'ai',
-        content: answer,
-        sources,
-        model,
-        confidence,
-        timestamp: new Date().toISOString(),
-      };
-      setMessages(prev => [...prev, aiMsg]);
-      saveToHistory(q, answer);
-    } catch (err) {
-      const errMsg = {
-        role: 'ai',
-        content: 'Erreur: ' + (err?.response?.data?.error || err.message),
-        error: true,
-        timestamp: new Date().toISOString(),
-      };
-      setMessages(prev => [...prev, errMsg]);
-    } finally {
-      setLoading(false);
-      setStreamStatus('');
+  // Quand le stream se termine, consolider le message IA
+  const prevStreamingRef = useRef(false);
+  useEffect(() => {
+    if (prevStreamingRef.current && !streaming && streamText) {
+      // Stream terminé — finaliser le message IA avec le contenu complet
+      setMessages(prev => {
+        const updated = [...prev];
+        const lastIdx = updated.length - 1;
+        if (lastIdx >= 0 && updated[lastIdx].role === 'ai' && updated[lastIdx].streaming) {
+          const finalMsg = {
+            ...updated[lastIdx],
+            content:   streamText,
+            sources:   sources,
+            model:     streamModel || updated[lastIdx].model,
+            streaming: false,
+          };
+          updated[lastIdx] = finalMsg;
+          // Sauvegarder dans l'historique
+          const q = updated.findLast?.(m => m.role === 'user')?.content || '';
+          if (q) {
+            const entry = { id: Date.now(), question: q, answer: streamText, timestamp: new Date().toISOString(), standard };
+            const next = [entry, ...history].slice(0, 30);
+            setHistory(next);
+            localStorage.setItem('ai_chat_history', JSON.stringify(next));
+          }
+        }
+        return updated;
+      });
     }
-  };
+    prevStreamingRef.current = streaming;
+  }, [streaming, streamText, sources, streamModel, history, standard]);
 
-  const clearHistory = () => {
+  // Mettre à jour le message IA en cours avec les tokens au fil de l'eau
+  useEffect(() => {
+    if (!streaming) return;
+    setMessages(prev => {
+      const updated = [...prev];
+      const lastIdx = updated.length - 1;
+      if (lastIdx >= 0 && updated[lastIdx].role === 'ai' && updated[lastIdx].streaming) {
+        updated[lastIdx] = {
+          ...updated[lastIdx],
+          content: streamText || '',
+          sources: sources.length > 0 ? sources : updated[lastIdx].sources,
+        };
+        return updated;
+      }
+      return prev;
+    });
+  }, [streamText, sources, streaming]);
+
+  const handleSend = useCallback(async (question) => {
+    const q = (question || input).trim();
+    if (!q || streaming) return;
+
+    setInput('');
+
+    // Optimistic UI : message utilisateur apparaît immédiatement
+    const userMsg  = { role: 'user', content: q, timestamp: new Date().toISOString() };
+    // Placeholder IA : affiché immédiatement avec animation de génération
+    const aiHolder = {
+      role: 'ai', content: '', sources: [], streaming: true,
+      model: '', timestamp: new Date().toISOString(),
+    };
+    setMessages(prev => [...prev, userMsg, aiHolder]);
+
+    await startStream({ question: q, standard, top_k: 5, token });
+  }, [input, streaming, standard, token, startStream]);
+
+  const clearHistory = useCallback(() => {
     setHistory([]);
     localStorage.removeItem('ai_chat_history');
-  };
+  }, []);
 
-  const exportChat = (format) => {
+  const exportChat = useCallback((format) => {
     const data = format === 'json'
       ? JSON.stringify(messages, null, 2)
       : messages.map(m => `[${m.role.toUpperCase()}] ${m.content}`).join('\n\n');
     const blob = new Blob([data], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url;
-    a.download = `chat_export.${format}`; a.click();
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = `chat_export.${format}`; a.click();
     URL.revokeObjectURL(url);
-  };
+  }, [messages]);
 
   return (
     <div className="flex h-[calc(100vh-320px)] min-h-[500px] gap-4">
@@ -1482,7 +1650,7 @@ function AssistantTab({ llmAvailable, standards }) {
             </div>
             <div>
               <p className="text-xs font-bold text-slate-900">Assistant IA Compliance</p>
-              <p className="text-[10px] text-slate-400">RAG · FAISS · {llmAvailable ? 'Ollama Online' : 'Fallback Mode'}</p>
+              <p className="text-[10px] text-slate-400">RAG · FAISS · {llmAvailable ? 'Ollama Online' : 'Fallback Mode'} · SSE Stream</p>
             </div>
             <span className={`ml-2 rounded-full px-2 py-0.5 text-[10px] font-semibold ${llmAvailable ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
               {llmAvailable ? '● En ligne' : '● Fallback'}
@@ -1502,7 +1670,7 @@ function AssistantTab({ llmAvailable, standards }) {
               className="rounded-xl border border-slate-200 p-1.5 hover:bg-slate-50 text-slate-500">
               <Download size={13} />
             </button>
-            <button onClick={() => setMessages([])}
+            <button onClick={() => { abortStream(); setMessages([]); }}
               className="rounded-xl border border-slate-200 p-1.5 hover:bg-slate-50 text-rose-400">
               <Trash2 size={13} />
             </button>
@@ -1520,6 +1688,7 @@ function AssistantTab({ llmAvailable, standards }) {
                 <p className="text-sm font-semibold text-slate-700">Posez une question sur les normes ISO</p>
                 <p className="text-xs text-slate-400 mt-1">L'assistant utilise votre base de connaissances interne</p>
               </div>
+              {/* Suggestions — chaque clic déclenche immédiatement le stream */}
               <div className="grid gap-2 grid-cols-2 max-w-md">
                 {SUGGESTIONS.map(s => (
                   <button key={s} onClick={() => handleSend(s)}
@@ -1531,53 +1700,39 @@ function AssistantTab({ llmAvailable, standards }) {
             </div>
           )}
 
-          {messages.map((msg, i) => (
-            <motion.div key={i} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}
-              className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[80%] rounded-2xl px-4 py-3 text-sm ${
-                msg.role === 'user'
-                  ? 'bg-slate-900 text-white'
-                  : msg.error
-                    ? 'border border-rose-200 bg-rose-50 text-rose-700'
-                    : 'border border-slate-200 bg-white text-slate-800 shadow-sm'
-              }`}>
-                <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
-                {msg.sources?.length > 0 && (
-                  <div className="mt-3 pt-2 border-t border-slate-100">
-                    <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">Sources utilisées</p>
-                    <div className="space-y-1">
-                      {msg.sources.slice(0, 3).map((src, j) => (
-                        <div key={j} className="flex items-center gap-1.5 text-[10px]">
-                          <span className={`rounded-full px-1.5 py-0.5 font-semibold ${src.decision === 'approved' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
-                            {src.decision}
-                          </span>
-                          <span className="text-slate-500 truncate">{src.rule}</span>
-                          {src.score != null && <span className="text-sky-600 font-semibold ml-auto">{src.score}%</span>}
-                        </div>
-                      ))}
-                    </div>
+          {messages.map((msg, i) => {
+            const isCurrentStream = msg.streaming && i === messages.length - 1;
+            return (
+              <motion.div key={i} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}
+                className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                {msg.role === 'user' ? (
+                  <div className="max-w-[80%] rounded-2xl bg-slate-900 px-4 py-3 text-sm text-white">
+                    <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
+                    <p className="text-[10px] opacity-50 mt-1">{fmt(msg.timestamp)}</p>
                   </div>
+                ) : msg.error ? (
+                  <div className="max-w-[80%] rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                    <p>{msg.content}</p>
+                  </div>
+                ) : (
+                  /* Bulle IA — memoïsée pour éviter les re-renders sur tokens entrants */
+                  <AiMessageBubble msg={msg} isStreaming={isCurrentStream} />
                 )}
-                <div className="flex items-center justify-between mt-1 gap-2">
-                  <p className="text-[10px] opacity-50">{fmt(msg.timestamp)}</p>
-                  {msg.model && <span className="text-[10px] opacity-50">{msg.model}</span>}
-                  {msg.confidence && <span className="text-[10px] opacity-50">conf: {msg.confidence}</span>}
-                </div>
-              </div>
-            </motion.div>
-          ))}
+              </motion.div>
+            );
+          })}
 
-          {/* Stream status indicator */}
-          {loading && streamStatus && (
+          {/* Indicateur de phase (searching / generating) avant le premier token */}
+          {streaming && phase === 'searching' && (
             <div className="flex items-center gap-2 text-xs text-slate-500">
               <div className="flex gap-1">
-                {[0,1,2].map(i => (
+                {[0, 1, 2].map(i => (
                   <motion.div key={i} animate={{ scale: [1, 1.5, 1] }}
                     transition={{ repeat: Infinity, duration: 0.8, delay: i * 0.2 }}
                     className="h-1.5 w-1.5 rounded-full bg-violet-400" />
                 ))}
               </div>
-              <span>{streamStatus}</span>
+              <span>Recherche dans la base de connaissances…</span>
             </div>
           )}
           <div ref={messagesEndRef} />
@@ -1591,19 +1746,20 @@ function AssistantTab({ llmAvailable, standards }) {
               onChange={e => setInput(e.target.value)}
               placeholder="Posez votre question sur les normes ISO…"
               className="flex-1 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm outline-none focus:border-violet-400 transition"
-              disabled={loading}
+              disabled={streaming}
             />
-            <button
-              type="submit"
-              disabled={loading || !input.trim()}
-              className="rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-violet-500 disabled:opacity-50 transition flex items-center gap-1.5"
-            >
-              {loading ? (
-                <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1 }}>
-                  <RefreshCw size={15} />
-                </motion.div>
-              ) : <Send size={15} />}
-            </button>
+            {streaming ? (
+              <button type="button" onClick={abortStream}
+                className="rounded-xl bg-rose-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-rose-400 transition flex items-center gap-1.5">
+                <Play size={15} className="rotate-90" />
+                Stop
+              </button>
+            ) : (
+              <button type="submit" disabled={!input.trim()}
+                className="rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-violet-500 disabled:opacity-50 transition flex items-center gap-1.5">
+                <Send size={15} />
+              </button>
+            )}
           </form>
         </div>
       </div>
@@ -1659,8 +1815,8 @@ export default function AIInsights() {
   };
 
   const llmAvailable = overviewData?.llm?.available ?? false;
-  const standards = overviewData?.summary?.available_standards ?? [];
-  const healthScore = overviewData?.health?.score ?? 0;
+  const standards    = overviewData?.summary?.available_standards ?? [];
+  const healthScore  = overviewData?.health?.score ?? 0;
 
   return (
     <Layout>
@@ -1690,7 +1846,7 @@ export default function AIInsights() {
               </div>
             )}
             {lastRefresh && (
-              <span className="text-2xs text-slate-400">
+              <span className="text-slate-400 text-xs">
                 Updated {lastRefresh.toLocaleTimeString('fr-FR')}
               </span>
             )}
@@ -1735,36 +1891,16 @@ export default function AIInsights() {
             exit={{ opacity: 0, y: -6 }}
             transition={{ duration: 0.15 }}
           >
-            {activeTab === 'overview' && (
-              <OverviewTab data={overviewData} loading={overviewLoading} />
-            )}
-            {activeTab === 'health' && (
-              <HealthTab data={overviewData} loading={overviewLoading} mlopsData={mlopsData} mlopsLoading={mlopsLoading} />
-            )}
-            {activeTab === 'drift' && (
-              <DriftTab />
-            )}
-            {activeTab === 'explainable' && (
-              <ExplainableTab data={overviewData} loading={overviewLoading} />
-            )}
-            {activeTab === 'dataset' && (
-              <DatasetQualityTab />
-            )}
-            {activeTab === 'reco' && (
-              <RecommendationsTab data={overviewData} loading={overviewLoading} />
-            )}
-            {activeTab === 'comparison' && (
-              <ComparisonTab data={overviewData} loading={overviewLoading} />
-            )}
-            {activeTab === 'timeline' && (
-              <TimelineTab data={overviewData} loading={overviewLoading} />
-            )}
-            {activeTab === 'semantic' && (
-              <SemanticTab data={overviewData} loading={overviewLoading} />
-            )}
-            {activeTab === 'assistant' && (
-              <AssistantTab llmAvailable={llmAvailable} standards={standards} />
-            )}
+            {activeTab === 'overview'    && <OverviewTab    data={overviewData} loading={overviewLoading} />}
+            {activeTab === 'health'      && <HealthTab      data={overviewData} loading={overviewLoading} mlopsData={mlopsData} mlopsLoading={mlopsLoading} />}
+            {activeTab === 'drift'       && <DriftTab />}
+            {activeTab === 'explainable' && <ExplainableTab data={overviewData} loading={overviewLoading} />}
+            {activeTab === 'dataset'     && <DatasetQualityTab />}
+            {activeTab === 'reco'        && <RecommendationsTab data={overviewData} loading={overviewLoading} />}
+            {activeTab === 'comparison'  && <ComparisonTab  data={overviewData} loading={overviewLoading} />}
+            {activeTab === 'timeline'    && <TimelineTab    data={overviewData} loading={overviewLoading} />}
+            {activeTab === 'semantic'    && <SemanticTab    data={overviewData} loading={overviewLoading} />}
+            {activeTab === 'assistant'   && <AssistantTab   llmAvailable={llmAvailable} standards={standards} />}
           </motion.div>
         </AnimatePresence>
 
