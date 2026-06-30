@@ -95,7 +95,7 @@ function AppContent() {
         <Route path="/system"     element={<ProtectedRoute><System /></ProtectedRoute>} />
 
         <Route path="/validations" element={
-          <RoleProtectedRoute roles={['ADMIN','TEAMLEAD','EMPLOYEE']}>
+          <RoleProtectedRoute roles={['ADMIN','TEAMLEAD']}>
             <Validations />
           </RoleProtectedRoute>
         } />

@@ -196,20 +196,20 @@ const Dashboard = () => {
   /* Actions per role */
   const ACTIONS = {
     EMPLOYEE: [
-      { title: 'Submit a Document',     description: 'Upload compliance evidence for review',    icon: FileText,      link: '/documents'    },
-      { title: 'My Validations',        description: 'Check the status of your submissions',     icon: ClipboardCheck,link: '/validations'   },
+      { title: 'Submit a Document',        description: 'Upload compliance evidence for review',         icon: FileText,       link: '/documents'    },
+      { title: 'My Submissions',           description: 'Track the status of your submitted documents',  icon: ClipboardCheck, link: '/documents'    },
     ],
     TEAMLEAD: [
-      { title: 'Review Validations',    description: 'Approve or reject submitted documents',    icon: ClipboardCheck,link: '/validations'   },
-      { title: 'Manage Standards',      description: 'Define and update compliance rules',       icon: BookOpen,      link: '/normes'        },
-      { title: 'Document Analysis',     description: 'Analyze documents automatically',          icon: ShieldCheck,   link: '/document-analysis' },
-      { title: 'Compliance Dashboard',  description: 'Executive compliance overview',            icon: TrendingUp,    link: '/compliance-dashboard' },
+      { title: 'Review Validations',       description: 'Approve or reject submitted documents',         icon: ClipboardCheck, link: '/validations'  },
+      { title: 'Manage Standards',         description: 'Define and update compliance rules',            icon: BookOpen,       link: '/normes'       },
+      { title: 'Document Analysis',        description: 'Analyze documents automatically with AI',       icon: ShieldCheck,    link: '/document-analysis' },
+      { title: 'Compliance Dashboard',     description: 'Executive compliance overview',                 icon: TrendingUp,     link: '/compliance-dashboard' },
     ],
     ADMIN: [
-      { title: 'Review Validations',    description: 'Approve or reject submitted documents',    icon: ClipboardCheck,link: '/validations'   },
-      { title: 'Manage Users',          description: 'Create, edit and manage accounts',         icon: Users,         link: '/users'         },
-      { title: 'ML Dashboard',          description: 'Train and compare ML models',              icon: Activity,      link: '/ml-dashboard'  },
-      { title: 'Compliance Dashboard',  description: 'Executive compliance overview',            icon: TrendingUp,    link: '/compliance-dashboard' },
+      { title: 'Review Validations',       description: 'Approve or reject submitted documents',         icon: ClipboardCheck, link: '/validations'  },
+      { title: 'Manage Users',             description: 'Create, edit and manage accounts',              icon: Users,          link: '/users'        },
+      { title: 'ML Dashboard',             description: 'Train and compare ML models',                   icon: Activity,       link: '/ml-dashboard' },
+      { title: 'Compliance Dashboard',     description: 'Executive compliance overview',                 icon: TrendingUp,     link: '/compliance-dashboard' },
     ],
   };
 

@@ -5,6 +5,16 @@ import unicodedata
 from rest_framework.exceptions import ValidationError
 
 
+# ── Allowed upload types ──────────────────────────────────────────────────────
+ALLOWED_EXTENSIONS = {'.pdf', '.docx'}
+# Maximum upload size: 20 MB
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+# Allowed MIME types (belt-and-suspenders alongside extension check)
+ALLOWED_MIME_TYPES = {
+    'application/pdf',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+}
+
 RULE_KEYWORDS = {
     'ISO9001': {
         'Identification du document': ['reference', 'doc id', 'référence'],
@@ -20,6 +30,52 @@ RULE_KEYWORDS = {
     },
     'ISO27001': {},
 }
+
+
+def validate_uploaded_file(file):
+    """
+    Server-side file validation applied before any processing.
+
+    Checks:
+    1. File extension against the whitelist
+    2. File size against MAX_UPLOAD_BYTES (20 MB)
+    3. Content-type header against ALLOWED_MIME_TYPES (advisory only —
+       the header is client-supplied, but it catches obvious mistakes)
+
+    Raises ValidationError with a descriptive message on any failure.
+    This function must be called in every view that accepts file uploads.
+    """
+    if not file:
+        raise ValidationError({'file': 'No file provided.'})
+
+    # 1. Extension check
+    filename  = getattr(file, 'name', '')
+    _, ext    = os.path.splitext(filename.lower())
+    if ext not in ALLOWED_EXTENSIONS:
+        raise ValidationError({
+            'file': (
+                f'File type "{ext}" is not allowed. '
+                f'Accepted formats: {", ".join(sorted(ALLOWED_EXTENSIONS))}.'
+            )
+        })
+
+    # 2. Size check
+    size = getattr(file, 'size', None)
+    if size is not None and size > MAX_UPLOAD_BYTES:
+        mb = MAX_UPLOAD_BYTES // (1024 * 1024)
+        raise ValidationError({
+            'file': f'File size exceeds the {mb} MB limit.'
+        })
+
+    # 3. Content-type advisory check
+    content_type = getattr(file, 'content_type', '') or ''
+    if content_type and content_type not in ALLOWED_MIME_TYPES:
+        raise ValidationError({
+            'file': (
+                f'Unexpected content type "{content_type}". '
+                'Please upload a valid PDF or DOCX file.'
+            )
+        })
 
 
 def extract_text(file):

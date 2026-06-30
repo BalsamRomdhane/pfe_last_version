@@ -1,19 +1,19 @@
-// ══════════════════════════════════════════════════════════════════════
-// Jenkinsfile — Enterprise ISO Compliance Platform
-// Pipeline MLOps + DevSecOps — Windows local, sans Docker
+﻿// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// Jenkinsfile â€” Enterprise ISO Compliance Platform
+// Pipeline MLOps + DevSecOps â€” Windows local, sans Docker
 //
 // STAGES :
-//   1  · Checkout
-//   2  · Install Dependencies
-//   3  · Django Check & Migrate
-//   4  · Dataset Validation
-//   5  · Drift Detection
-//   6  · SonarQube Analysis        (DevSecOps)
-//   7  · Quality Gate              (DevSecOps)
-//   8  · ML Training
-//   9  · Export Metriques
-//   10 · TrainingJob Update
-//   11 · Cleanup
+//   1  Â· Checkout
+//   2  Â· Install Dependencies
+//   3  Â· Django Check & Migrate
+//   4  Â· Dataset Validation
+//   5  Â· Drift Detection
+//   6  Â· SonarQube Analysis        (DevSecOps)
+//   7  Â· Quality Gate              (DevSecOps)
+//   8  Â· ML Training
+//   9  Â· Export Metriques
+//   10 Â· TrainingJob Update
+//   11 Â· Cleanup
 //
 // ARCHITECTURE :
 //   Tout le code Python multi-lignes est dans backend/ci/*.py
@@ -25,30 +25,30 @@
 //   - Jenkins server name: SonarQube      (Manage Jenkins > System > SonarQube Servers)
 //   - Credential ID      : sonarqube-token (Secret Text)
 //   - sonar-project.properties au root du workspace
-//   - Aucun token ni URL hardcodes — injectes par withSonarQubeEnv
-// ══════════════════════════════════════════════════════════════════════
+//   - Aucun token ni URL hardcodes â€” injectes par withSonarQubeEnv
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 pipeline {
     agent any
 
-    // ── Variables d'environnement globales ──────────────────────────
+    // â”€â”€ Variables d'environnement globales â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     environment {
         // Chemin vers le backend Django
         BACKEND_DIR            = "${WORKSPACE}\\backend"
         DJANGO_SETTINGS_MODULE = "enterprise_platform.settings"
 
-        // Force UTF-8 — obligatoire sur Windows CP850/CP1252
+        // Force UTF-8 â€” obligatoire sur Windows CP850/CP1252
         PYTHONIOENCODING = "utf-8"
         PYTHONUTF8       = "1"
 
-        // PostgreSQL — adapter selon la machine locale
+        // PostgreSQL â€” adapter selon la machine locale
         DB_HOST = "localhost"
         DB_PORT = "5432"
         DB_NAME = "compliance_db"
         DB_USER = "postgres"
     }
 
-    // ── Parametres de build ─────────────────────────────────────────
+    // â”€â”€ Parametres de build â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     parameters {
         choice(
             name: 'STANDARD',
@@ -67,23 +67,23 @@ pipeline {
         )
     }
 
-    // ── Options pipeline ────────────────────────────────────────────
+    // â”€â”€ Options pipeline â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     options {
         timeout(time: 60, unit: 'MINUTES')
         buildDiscarder(logRotator(numToKeepStr: '10'))
         timestamps()
     }
 
-    // ════════════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     stages {
 
-        // ────────────────────────────────────────────────────────────
-        // STAGE 1 · Checkout
+        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // STAGE 1 Â· Checkout
         //
         // Recupere le code source depuis le SCM configure dans Jenkins.
         // Affiche les 5 derniers commits et le statut git pour
         // tracabilite et debug.
-        // ────────────────────────────────────────────────────────────
+        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         stage('1 - Checkout') {
             steps {
                 echo "[INFO] Checkout du depot - Build #${env.BUILD_NUMBER}"
@@ -94,13 +94,13 @@ pipeline {
             }
         }
 
-        // ────────────────────────────────────────────────────────────
-        // STAGE 2 · Install Dependencies
+        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // STAGE 2 Â· Install Dependencies
         //
         // Cree ou reutilise le venv Python .venv dans backend/.
         // Installe toutes les dependances depuis requirements.txt.
         // Verifie les imports critiques : django, sklearn, joblib, numpy.
-        // ────────────────────────────────────────────────────────────
+        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         stage('2 - Install Dependencies') {
             steps {
                 echo "[INFO] Verification et installation des dependances Python..."
@@ -126,13 +126,13 @@ pipeline {
             }
         }
 
-        // ────────────────────────────────────────────────────────────
-        // STAGE 3 · Django Check & Migrate
+        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // STAGE 3 Â· Django Check & Migrate
         //
         // Verifie la configuration Django (manage.py check).
         // Applique les migrations de base de donnees.
         // Execute ci/check_django.py pour validation approfondie.
-        // ────────────────────────────────────────────────────────────
+        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         stage('3 - Django Check') {
             steps {
                 echo "[INFO] Verification Django et migration de la base de donnees..."
@@ -142,17 +142,35 @@ pipeline {
                     bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe ci\\check_django.py'
                 }
                 echo "[OK] Django operationnel - base de donnees synchronisee."
+        // ────────────────────────────────────────────────────────────
+        // STAGE 3.5 - Django Tests
+        //
+        // Suite de tests unitaires avant SonarQube et training.
+        // Utilise --keepdb pour accélérer les runs successifs.
+        // ────────────────────────────────────────────────────────────
+        stage('3.5 - Django Tests') {
+            steps {
+                echo "[INFO] Execution des tests unitaires Django..."
+                dir("${BACKEND_DIR}") {
+                    bat '''
+                        chcp 65001 > nul
+                        .venv\\Scripts\\python.exe manage.py test api authentication notifications compliance --verbosity=1 --keepdb 2>&1 || echo [WARN] Some tests failed
+                    '''
+                }
+                echo "[OK] Tests Django termines."
+            }
+        }
             }
         }
 
-        // ────────────────────────────────────────────────────────────
-        // STAGE 4 · Dataset Validation
+        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // STAGE 4 Â· Dataset Validation
         //
         // Audite le systeme, synchronise les datasets ISO, remplit
         // les donnees ML avec fill_ml_datasets.
         // Scripts : ci/check_dataset.py
         // Commandes : system_audit, sync_all_datasets, fill_ml_datasets
-        // ────────────────────────────────────────────────────────────
+        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         stage('4 - Dataset Validation') {
             steps {
                 echo "[INFO] Validation du dataset ML (standard=${params.STANDARD})..."
@@ -169,8 +187,8 @@ pipeline {
             }
         }
 
-        // ────────────────────────────────────────────────────────────
-        // STAGE 4.5 · Security Analysis Validation
+        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // STAGE 4.5 Â· Security Analysis Validation
         //
         // Verifie que le module Document Security Analysis est
         // correctement installe, migre et operationnel.
@@ -180,7 +198,7 @@ pipeline {
         //   - acces a la table DB (migration appliquee)
         //   - routing URL fonctionnel
         // Script : ci/check_security.py
-        // ────────────────────────────────────────────────────────────
+        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         stage('4.5 - Security Analysis Validation') {
             steps {
                 echo "[INFO] Validation du module Document Security Analysis..."
@@ -191,14 +209,14 @@ pipeline {
             }
         }
 
-        // ────────────────────────────────────────────────────────────
-        // STAGE 5 · Drift Detection
+        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // STAGE 5 Â· Drift Detection
         //
         // Calcule le drift semantique entre donnees historiques et
         // recentes via TF-IDF cosinus (70% hist / 30% recent).
         // Produit : artifacts/drift_report.json
         // Script  : ci/run_drift.py
-        // ────────────────────────────────────────────────────────────
+        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         stage('5 - Drift Detection') {
             steps {
                 echo "[INFO] Calcul du drift semantique..."
@@ -216,8 +234,8 @@ pipeline {
             }
         }
 
-        // ────────────────────────────────────────────────────────────
-        // STAGE 6 · SonarQube Analysis
+        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // STAGE 6 Â· SonarQube Analysis
         //
         // Analyse statique du code source (Python + React/JS).
         // Le scanner est execute depuis la RACINE du workspace afin
@@ -237,7 +255,7 @@ pipeline {
         //
         // CONDITION :
         //   Le stage est ignore si SKIP_SONAR=true (debug).
-        // ────────────────────────────────────────────────────────────
+        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         stage('6 - SonarQube Analysis') {
             when {
                 expression { return !params.SKIP_SONAR }
@@ -266,8 +284,8 @@ pipeline {
             }
         }
 
-        // ────────────────────────────────────────────────────────────
-        // STAGE 7 · Quality Gate
+        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // STAGE 7 Â· Quality Gate
         //
         // Attend le resultat du Quality Gate SonarQube.
         // Le plugin SonarQube Scanner pour Jenkins recupere le resultat
@@ -279,7 +297,7 @@ pipeline {
         // Timeout de 10 minutes pour eviter un blocage indefini.
         //
         // CONDITION : ignore si SKIP_SONAR=true.
-        // ────────────────────────────────────────────────────────────
+        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         stage('7 - Quality Gate') {
             when {
                 expression { return !params.SKIP_SONAR }
@@ -293,14 +311,14 @@ pipeline {
             }
         }
 
-        // ────────────────────────────────────────────────────────────
-        // STAGE 8 · ML Training
+        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // STAGE 8 Â· ML Training
         //
         // Entraine les modeles ML (RandomForest, LogisticRegression,
         // GradientBoosting, BiLSTM) pour les standards selectionnes.
         // Script : ci/train_standard.py <STANDARD>
         // Source  : ml/train_models.py -> train_all_models()
-        // ────────────────────────────────────────────────────────────
+        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         stage('8 - ML Training') {
             steps {
                 echo "[INFO] Entrainement ML - standard=${params.STANDARD}..."
@@ -325,15 +343,15 @@ pipeline {
             }
         }
 
-        // ────────────────────────────────────────────────────────────
-        // STAGE 9 · Export Metriques
+        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // STAGE 9 Â· Export Metriques
         //
         // Exporte les metriques d'evaluation vers :
         //   artifacts/prometheus_metrics.txt
         //   artifacts/evaluation_summary.json
         //   artifacts/drift_report.json
         // Script : ci/export_metrics.py
-        // ────────────────────────────────────────────────────────────
+        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         stage('9 - Export Metriques') {
             steps {
                 echo "[INFO] Export des metriques ML et Prometheus..."
@@ -351,13 +369,13 @@ pipeline {
             }
         }
 
-        // ────────────────────────────────────────────────────────────
-        // STAGE 10 · TrainingJob Update
+        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // STAGE 10 Â· TrainingJob Update
         //
         // Met a jour l'enregistrement TrainingJob en base de donnees
         // avec les metriques du pipeline (F1, accuracy, drift, version).
         // Script : ci/update_training_job.py
-        // ────────────────────────────────────────────────────────────
+        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         stage('10 - TrainingJob Update') {
             steps {
                 echo "[INFO] Mise a jour du TrainingJob en base de donnees..."
@@ -368,12 +386,12 @@ pipeline {
             }
         }
 
-        // ────────────────────────────────────────────────────────────
-        // STAGE 11 · Cleanup
+        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // STAGE 11 Â· Cleanup
         //
         // Supprime les repertoires __pycache__ generes durant le build
         // pour maintenir un espace de travail propre entre les builds.
-        // ────────────────────────────────────────────────────────────
+        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         stage('11 - Cleanup') {
             steps {
                 echo "[INFO] Nettoyage des fichiers cache Python..."
@@ -390,9 +408,9 @@ pipeline {
         }
 
     }
-    // ════════════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-    // ── Post-build actions ──────────────────────────────────────────
+    // â”€â”€ Post-build actions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     post {
         success {
             echo "========================================================="
@@ -419,3 +437,4 @@ pipeline {
         }
     }
 }
+

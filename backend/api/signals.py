@@ -129,26 +129,37 @@ def create_training_sample_on_validation(sender, instance, created, update_field
             logger.warning('Failed to refresh document training sample for document %s: %s', document.id, exc)
 
         # Also create or update a RuleTrainingSample for this validation (one per document+rule)
-        try:
-            RuleTrainingSample.objects.update_or_create(
-                document=document,
-                rule=rule,
-                defaults={
-                    'norm': document.norme,
-                    'rule_title': rule.title or '',
-                    'rule_description': rule.description or '',
-                    'document_text': document_text,
-                    'evidence_text': instance.evidence_text or '',
-                    'reviewer_comment': instance.comment or '',
-                    'recommendation': rule.action or '',
-                    'confidence_score': float(defaults.get('confidence_score') or 0.0),
-                    'semantic_score': float(0.0),
-                    'label': 'approved' if instance.is_valid else ('rejected' if instance.is_valid is False else 'pending'),
-                    'final_document_decision': document.final_decision or document.status,
-                }
+        # Skip synthetic validations created by direct approval/rejection (marked [AUTO]).
+        # These don't represent genuine TeamLead reasoning and would corrupt the ML dataset.
+        evidence = instance.evidence_text or ''
+        is_synthetic = evidence.startswith('[AUTO]')
+
+        if not is_synthetic:
+            try:
+                RuleTrainingSample.objects.update_or_create(
+                    document=document,
+                    rule=rule,
+                    defaults={
+                        'norm': document.norme,
+                        'rule_title': rule.title or '',
+                        'rule_description': rule.description or '',
+                        'document_text': document_text,
+                        'evidence_text': evidence,
+                        'reviewer_comment': instance.comment or '',
+                        'recommendation': rule.action or '',
+                        'confidence_score': float(defaults.get('confidence_score') or 0.0),
+                        'semantic_score': float(0.0),
+                        'label': 'approved' if instance.is_valid else ('rejected' if instance.is_valid is False else 'pending'),
+                        'final_document_decision': document.final_decision or document.status,
+                    }
+                )
+            except Exception as exc:
+                logger.error('Failed to create/update RuleTrainingSample for Validation %s: %s', instance.id, exc)
+        else:
+            logger.debug(
+                'Skipped RuleTrainingSample for synthetic validation (doc=%s, rule=%s)',
+                document.id, rule.id,
             )
-        except Exception as exc:
-            logger.error('Failed to create/update RuleTrainingSample for Validation %s: %s', instance.id, exc)
 
         action = "Created" if created_sample else "Updated"
         # Determine what changed (if updated)

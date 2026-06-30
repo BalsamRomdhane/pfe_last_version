@@ -16,6 +16,7 @@ from django.views.decorators.csrf import csrf_exempt
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
 
 from rbac.models import UserProfile
@@ -26,6 +27,16 @@ from .services import KeycloakService
 logger = logging.getLogger(__name__)
 
 
+class LoginRateThrottle(AnonRateThrottle):
+    """
+    Dedicated throttle for the login endpoint.
+    Rate: 10 attempts / minute per IP (configured in REST_FRAMEWORK['DEFAULT_THROTTLE_RATES']['login']).
+    This protects against brute-force attacks without requiring any
+    external dependency (uses Django's cache backend).
+    """
+    scope = 'login'
+
+
 # ── Login ─────────────────────────────────────────────────────────────────────
 
 @method_decorator(csrf_exempt, name='dispatch')
@@ -33,9 +44,13 @@ class LoginView(APIView):
     """
     Login endpoint — authenticates via Keycloak with Django fallback.
     POST /api/auth/login/
+
+    Rate-limited: 10 attempts/minute per IP via LoginRateThrottle.
+    bypass_keycloak is silently disabled in production (DEBUG=False).
     """
     authentication_classes = []
-    permission_classes = [AllowAny]
+    permission_classes     = [AllowAny]
+    throttle_classes       = [LoginRateThrottle]
 
     def post(self, request):
         serializer = LoginSerializer(data=request.data)

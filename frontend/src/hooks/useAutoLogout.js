@@ -1,9 +1,10 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-const INACTIVITY_WARNING_MS = 19 * 60 * 1000;
-const INACTIVITY_LOGOUT_MS = 20 * 60 * 1000;
-const LOGOUT_STORAGE_KEY = 'app_auto_logout';
+const INACTIVITY_WARNING_MS  = 19 * 60 * 1000;   // 19 min
+const INACTIVITY_LOGOUT_MS   = 20 * 60 * 1000;   // 20 min
+const LOGOUT_STORAGE_KEY     = 'app_auto_logout';
+const WARNING_ELEMENT_ID     = 'auto-logout-warning';
 
 const clearAuthentication = () => {
   localStorage.removeItem('token');
@@ -18,64 +19,84 @@ const broadcastLogout = () => {
   }
 };
 
-const useAutoLogout = () => {
-  const navigate = useNavigate();
-  const warningTimeoutRef = useRef(null);
-  const logoutTimeoutRef = useRef(null);
+/** Show a non-blocking toast instead of window.alert() */
+const showWarningToast = () => {
+  // Reuse if already present
+  let el = document.getElementById(WARNING_ELEMENT_ID);
+  if (!el) {
+    el = document.createElement('div');
+    el.id = WARNING_ELEMENT_ID;
+    Object.assign(el.style, {
+      position:     'fixed',
+      bottom:       '24px',
+      right:        '24px',
+      zIndex:       '99999',
+      background:   '#1e293b',
+      color:        '#f8fafc',
+      padding:      '12px 20px',
+      borderRadius: '12px',
+      boxShadow:    '0 8px 32px rgba(0,0,0,0.35)',
+      fontSize:     '13px',
+      fontFamily:   'system-ui, sans-serif',
+      maxWidth:     '320px',
+      lineHeight:   '1.5',
+      borderLeft:   '4px solid #f59e0b',
+    });
+    document.body.appendChild(el);
+  }
+  el.textContent = '⚠ Vous serez déconnecté dans 1 minute en raison d\'inactivité.';
+  el.style.display = 'block';
+};
 
-  const performLogout = () => {
+const hideWarningToast = () => {
+  const el = document.getElementById(WARNING_ELEMENT_ID);
+  if (el) el.style.display = 'none';
+};
+
+const useAutoLogout = () => {
+  const navigate        = useNavigate();
+  const warningRef      = useRef(null);
+  const logoutRef       = useRef(null);
+
+  const performLogout = useCallback(() => {
+    hideWarningToast();
     clearAuthentication();
     broadcastLogout();
     navigate('/login');
-  };
+  }, [navigate]);
 
-  const resetTimers = () => {
-    if (warningTimeoutRef.current) {
-      clearTimeout(warningTimeoutRef.current);
-    }
-    if (logoutTimeoutRef.current) {
-      clearTimeout(logoutTimeoutRef.current);
-    }
+  const resetTimers = useCallback(() => {
+    clearTimeout(warningRef.current);
+    clearTimeout(logoutRef.current);
+    hideWarningToast();
 
-    warningTimeoutRef.current = setTimeout(() => {
-      window.alert('You will be logged out in 1 minute due to inactivity.');
-    }, INACTIVITY_WARNING_MS);
-
-    logoutTimeoutRef.current = setTimeout(() => {
-      performLogout();
-    }, INACTIVITY_LOGOUT_MS);
-  };
+    warningRef.current = setTimeout(showWarningToast, INACTIVITY_WARNING_MS);
+    logoutRef.current  = setTimeout(performLogout,    INACTIVITY_LOGOUT_MS);
+  }, [performLogout]);
 
   useEffect(() => {
-    const activityEvents = ['mousemove', 'keydown', 'click'];
+    const events = ['mousemove', 'keydown', 'click', 'touchstart'];
 
-    const handleActivity = () => {
-      resetTimers();
-    };
-
-    const handleStorageEvent = (event) => {
-      if (event.key === LOGOUT_STORAGE_KEY) {
+    const handleActivity    = () => resetTimers();
+    const handleStorageEvent = (e) => {
+      if (e.key === LOGOUT_STORAGE_KEY) {
         clearAuthentication();
         navigate('/login');
       }
     };
 
-    activityEvents.forEach((eventName) => window.addEventListener(eventName, handleActivity));
+    events.forEach(ev => window.addEventListener(ev, handleActivity, { passive: true }));
     window.addEventListener('storage', handleStorageEvent);
-
     resetTimers();
 
     return () => {
-      activityEvents.forEach((eventName) => window.removeEventListener(eventName, handleActivity));
+      events.forEach(ev => window.removeEventListener(ev, handleActivity));
       window.removeEventListener('storage', handleStorageEvent);
-      if (warningTimeoutRef.current) {
-        clearTimeout(warningTimeoutRef.current);
-      }
-      if (logoutTimeoutRef.current) {
-        clearTimeout(logoutTimeoutRef.current);
-      }
+      clearTimeout(warningRef.current);
+      clearTimeout(logoutRef.current);
+      hideWarningToast();
     };
-  }, [navigate]);
+  }, [navigate, resetTimers]);
 };
 
 export default useAutoLogout;

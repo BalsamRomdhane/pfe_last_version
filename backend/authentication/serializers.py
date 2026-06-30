@@ -1,30 +1,43 @@
 from datetime import datetime
+from django.conf import settings
 from rest_framework import serializers
 from django.contrib.auth.models import User
 from rbac.models import UserProfile, Role, Department, AuditLog
 
+
 class LoginSerializer(serializers.Serializer):
     """
-    Login serializer that accepts either username, email, or login.
-    At least one of username, email or login must be provided.
+    Login serializer.
+
+    Accepts username, email, or the generic 'login' field.
+    `bypass_keycloak` is only honoured in DEBUG mode so that
+    production environments cannot be forced onto Django-only auth
+    via a public API parameter.
     """
-    login = serializers.CharField(required=False, allow_blank=True)
+    login    = serializers.CharField(required=False, allow_blank=True)
     username = serializers.CharField(required=False, allow_blank=True)
-    email = serializers.EmailField(required=False, allow_blank=True)
+    email    = serializers.EmailField(required=False, allow_blank=True)
     password = serializers.CharField()
+    # bypass_keycloak is accepted for backwards compatibility but is
+    # silently forced to False in production (DEBUG=False).
     bypass_keycloak = serializers.BooleanField(required=False, default=False)
 
     def validate(self, data):
-        """Ensure either username, email, or login is provided"""
-        login = data.get('login', '').strip()
+        login    = data.get('login',    '').strip()
         username = data.get('username', '').strip()
-        email = data.get('email', '').strip()
+        email    = data.get('email',    '').strip()
 
         if not login and not username and not email:
-            raise serializers.ValidationError("Either username, email, or login must be provided")
+            raise serializers.ValidationError(
+                'Either username, email, or login must be provided.'
+            )
 
-        # Prefer explicit login, then email, then username.
         data['login_field'] = login or email or username
+
+        # Security: disable Keycloak bypass in production
+        if not getattr(settings, 'DEBUG', False):
+            data['bypass_keycloak'] = False
+
         return data
 
 class DjangoLoginSerializer(serializers.Serializer):

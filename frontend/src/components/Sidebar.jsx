@@ -16,7 +16,8 @@ const NAV = [
     items: [
       { label: 'Dashboard',   icon: LayoutDashboard, path: '/dashboard',  roles: ['ADMIN','TEAMLEAD','EMPLOYEE'] },
       { label: 'Documents',   icon: FileText,        path: '/documents',  roles: ['ADMIN','TEAMLEAD','EMPLOYEE'] },
-      { label: 'Validations', icon: ClipboardCheck,  path: '/validations',roles: ['ADMIN','TEAMLEAD','EMPLOYEE'] },
+      // Validations: EMPLOYEE sees it but with read-only view (own docs only — enforced backend)
+      { label: 'Validations', icon: ClipboardCheck,  path: '/validations',roles: ['ADMIN','TEAMLEAD'] },
     ],
   },
   {

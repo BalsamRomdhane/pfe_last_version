@@ -8,7 +8,7 @@ import EmptyState from './common/EmptyState';
 import api from '../services/api';
 import {
   FileText, Search, ChevronLeft, ChevronRight,
-  ExternalLink, ClipboardCheck, SlidersHorizontal, X,
+  ExternalLink, ClipboardCheck, SlidersHorizontal, X, ShieldAlert,
 } from 'lucide-react';
 
 /* ─── helpers ──────────────────────────────────────────────────────────── */
@@ -390,13 +390,24 @@ const Documents = () => {
                       <td className="text-xs text-slate-500">{fmt(doc.created_at)}</td>
                       <td>
                         <div className="flex items-center gap-1">
-                          <Link
-                            to={`/validations?document=${doc.id}`}
-                            className="btn-icon-sm text-brand-500 hover:bg-brand-50 hover:text-brand-700"
-                            title="Review"
-                          >
-                            <ClipboardCheck size={13} />
-                          </Link>
+                          {(user?.role === 'ADMIN' || user?.role === 'TEAMLEAD') && (
+                            <Link
+                              to={`/validations?document=${doc.id}`}
+                              className="btn-icon-sm text-brand-500 hover:bg-brand-50 hover:text-brand-700"
+                              title="Review validations"
+                            >
+                              <ClipboardCheck size={13} />
+                            </Link>
+                          )}
+                          {(user?.role === 'ADMIN' || user?.role === 'TEAMLEAD') && (
+                            <Link
+                              to={`/document-security`}
+                              className="btn-icon-sm text-amber-500 hover:bg-amber-50 hover:text-amber-700"
+                              title="View security analysis"
+                            >
+                              <ShieldAlert size={13} />
+                            </Link>
+                          )}
                           {doc.file_url && (
                             <a
                               href={doc.file_url}

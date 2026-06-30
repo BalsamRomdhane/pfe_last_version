@@ -303,26 +303,6 @@ class TrainingSampleSerializer(serializers.ModelSerializer):
             'approved_rules',
             'rejected_rules',
         ]
-        read_only_fields = [
-            'document',
-            'norm_id',
-            'label',
-            'features',
-            'standard',
-            'confidence_score',
-            'teamlead_decision',
-            'approved',
-            'created_at',
-            'rules_with_evidence',
-            'total_rules',
-            'valid_rules_count',
-            'invalid_rules_count',
-            'rule_results_json',
-            'features_count',
-            'compliance_score',
-            'approved_rules',
-            'rejected_rules',
-        ]
 
     def _feature_values(self, obj):
         if isinstance(obj.features, dict):

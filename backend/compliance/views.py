@@ -1,4 +1,5 @@
 """Compliance OS — REST API Views."""
+from django.core.cache import cache
 from django.db.models import Avg, Count, Q
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
@@ -7,6 +8,9 @@ from rest_framework.response import Response
 
 from authentication.permissions import IsAdmin, IsTeamLeadOrAdmin
 from api.models import Norme, Rule
+
+# Cache TTL for expensive compliance computations (seconds)
+_COMPLIANCE_CACHE_TTL = 300   # 5 minutes
 
 
 @api_view(['GET'])
@@ -195,8 +199,20 @@ def compliance_critical_controls_api(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def compliance_executive_dashboard_api(request):
+    """
+    GET /api/compliance-os/executive-dashboard/
+    Cached for 5 minutes — expensive computation involving N×4 DB queries.
+    Cache is invalidated by POST /compliance-os/refresh/.
+    """
+    cache_key = 'compliance_executive_dashboard'
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return Response(cached)
+
     from compliance.services import get_executive_dashboard
-    return Response(get_executive_dashboard())
+    data = get_executive_dashboard()
+    cache.set(cache_key, data, timeout=_COMPLIANCE_CACHE_TTL)
+    return Response(data)
 
 
 @api_view(['POST'])
@@ -210,4 +226,6 @@ def compliance_refresh_all_api(request):
         compute_audit_readiness(norme.id)
         compute_maturity(norme.id)
         results[norme.name] = 'OK'
+    # Invalidate the cached executive dashboard after a manual refresh
+    cache.delete('compliance_executive_dashboard')
     return Response({'refreshed': results})

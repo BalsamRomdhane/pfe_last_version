@@ -1,4 +1,4 @@
-import joblib
+﻿import joblib
 import numpy as np
 
 _ORIGINAL_NP_ARRAY = np.array
@@ -71,7 +71,7 @@ from sklearn.base import clone
 
 from api.models import RULES_BY_STANDARD, TrainingSample, RuleTrainingSample, DocumentTrainingSample, Norme
 
-# Lazy import — BiLSTMClassifier requires sentence_transformers/torch which may
+# Lazy import â€” BiLSTMClassifier requires sentence_transformers/torch which may
 # fail on Windows if Visual C++ Redistributable is outdated.
 try:
     from ml.semantic import BiLSTMClassifier
@@ -81,7 +81,29 @@ except Exception:
     _BILSTM_AVAILABLE = False
 
 
-def _normalize_dataset_source(source):
+def _save_model_with_backup(model, model_path: str) -> str:
+    """
+    Save a trained model to disk, preserving the previous version as a backup.
+
+    Before overwriting ``model_path``, the existing file (if any) is renamed to
+    ``<model_path>.bak.<YYYYMMDD_HHMMSS>`` so that a rollback can be performed
+    manually by renaming the backup back to the original path.
+
+    Returns the path where the model was saved.
+    """
+    import shutil
+    if os.path.exists(model_path):
+        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+        backup_path = f'{model_path}.bak.{ts}'
+        try:
+            shutil.copy2(model_path, backup_path)
+        except Exception as exc:
+            print(f'Warning: could not backup previous model at {model_path}: {exc}')
+    _save_model_with_backup(model, model_path)
+    return model_path
+
+
+
     value = str(source or 'auto').strip().lower()
     if value in ('document', 'doc', 'classification', 'training'):
         return 'document'
@@ -129,7 +151,12 @@ def _get_labeled_evidence_samples(standard=None, norme_id=None):
         samples = samples.filter(norm_id=norme_id)
     elif standard:
         samples = samples.filter(norm__name__iexact=standard)
-    return samples.filter(label__in=['approved', 'rejected'])
+    # Exclude synthetic validations created by direct approval/rejection.
+    # These are marked with the [AUTO] prefix and do not represent genuine
+    # TeamLead reasoning — including them would corrupt the ML dataset.
+    return samples.filter(label__in=['approved', 'rejected']).exclude(
+        evidence_text__startswith='[AUTO]'
+    )
 
 MODELS_DIR = os.path.join(os.path.dirname(__file__), "models")
 os.makedirs(MODELS_DIR, exist_ok=True)
@@ -188,7 +215,7 @@ def _vectorize_evidence_sample(sample):
 
     # Text quality features
     has_reference = int(any(kw in text.lower() for kw in [
-        'ref.', 'référence', 'certif', 'iso', 'version', 'approuv', 'valid', 'conforme',
+        'ref.', 'rÃ©fÃ©rence', 'certif', 'iso', 'version', 'approuv', 'valid', 'conforme',
         'audit', 'procedure', 'politique', 'v1', 'v2', 'v3', 'v4', 'v5',
     ]))
     has_negative = int(any(kw in text.lower() for kw in [
@@ -196,8 +223,8 @@ def _vectorize_evidence_sample(sample):
         'non conforme', 'non-conforme', 'rejet', 'invalide', 'jamais',
     ]))
     has_positive = int(any(kw in text.lower() for kw in [
-        'conforme', 'approuvé', 'validé', 'présent', 'disponible', 'opérationnel',
-        'compliant', 'validé', 'certifié', 'implémenté',
+        'conforme', 'approuvÃ©', 'validÃ©', 'prÃ©sent', 'disponible', 'opÃ©rationnel',
+        'compliant', 'validÃ©', 'certifiÃ©', 'implÃ©mentÃ©',
     ]))
     text_length_norm = min(token_count / 60.0, 1.0)
     has_date = int(any(c.isdigit() and '/' in text for c in text.split()))
@@ -358,8 +385,8 @@ def load_dataset_with_metadata(standard=None, norme_id=None, source='auto'):
 def _remove_verdict_markers(text: str) -> str:
     """Strip deterministic verdict markers embedded in synthetic training texts.
 
-    The dataset generator prepended phrases like "Contrôle vérifié :" or
-    "Contrôle à renforcer :" that trivially encode the label into the feature
+    The dataset generator prepended phrases like "ContrÃ´le vÃ©rifiÃ© :" or
+    "ContrÃ´le Ã  renforcer :" that trivially encode the label into the feature
     space.  A BiLSTM (or any classifier) that sees these markers achieves 100 %
     accuracy without learning any real compliance pattern.
 
@@ -368,15 +395,15 @@ def _remove_verdict_markers(text: str) -> str:
     import re as _re
     # Verdict prefix patterns (appear at the very beginning or after the rule name bracket)
     VERDICT_PATTERNS = [
-        r"Contrôle vérifié\s*:",
+        r"ContrÃ´le vÃ©rifiÃ©\s*:",
         r"Controle verifie\s*:",
-        r"Contrôle à renforcer\s*:",
+        r"ContrÃ´le Ã  renforcer\s*:",
         r"Controle a renforcer\s*:",
-        r"Contrôle non conforme\s*:",
+        r"ContrÃ´le non conforme\s*:",
         r"Controle non conforme\s*:",
         r"VERDICT\s*:\s*\S[^.]*\.",  # e.g. "VERDICT : Insuffisant."
         r"VERDICT\s*:\s*[^.]*\.",
-        r"D'ÉVALUATION DE CONFORMITÉ",
+        r"D'Ã‰VALUATION DE CONFORMITÃ‰",
         r"D.EVALUATION DE CONFORMITE",
     ]
     cleaned = text
@@ -390,7 +417,7 @@ def _remove_verdict_markers(text: str) -> str:
 def load_text_dataset(standard=None, norme_id=None, source='auto'):
     texts = []
     y = []
-    groups = []   # document_id per sample — used for GroupShuffleSplit to prevent leakage
+    groups = []   # document_id per sample â€” used for GroupShuffleSplit to prevent leakage
     source_mode = _normalize_dataset_source(source)
 
     if source_mode == 'evidence':
@@ -412,7 +439,7 @@ def load_text_dataset(standard=None, norme_id=None, source='auto'):
         ev_t   = getattr(sample, 'evidence_text', '') or ''
         doc_t  = getattr(sample, 'document_text', '') or ''
         text = " ".join(part for part in [rule_t, ev_t, doc_t] if part and part.strip())
-        # Remove verdict markers that trivially encode the label → avoids 100 % accuracy
+        # Remove verdict markers that trivially encode the label â†’ avoids 100 % accuracy
         text = _remove_verdict_markers(text)
         if not text.strip():
             continue
@@ -642,7 +669,7 @@ def train_all_models(standard=None, norme_id=None, dataset_type='classification'
     if len(X) < 20:
         return {"error": "Not enough data - minimum 20 samples required"}
 
-    # ── TF-IDF text pipeline: use document text for RF/LR/GB when available ──
+    # â”€â”€ TF-IDF text pipeline: use document text for RF/LR/GB when available â”€â”€
     # This produces more realistic (non-perfect) accuracy than binary rule vectors.
     X_text_for_tfidf = []
     y_text_for_tfidf = []
@@ -768,7 +795,7 @@ def train_all_models(standard=None, norme_id=None, dataset_type='classification'
                     best_model_name = name
 
                 model_path = os.path.join(MODELS_DIR, f"{sanitize_standard(standard)}_{name}.pkl")
-                joblib.dump(tfidf_model, model_path)
+                _save_model_with_backup(tfidf_model, model_path)
 
                 results[name] = {
                     "accuracy":          round(float(accuracy), 4),
@@ -807,7 +834,7 @@ def train_all_models(standard=None, norme_id=None, dataset_type='classification'
         # Save metrics and skip the binary-vector loop below
         print(f"\n=== Training Complete (TF-IDF pipeline) ===")
         if not standard:
-            print("Warning: standard is None — skipping metrics JSON save to avoid orphan default_metrics.json")
+            print("Warning: standard is None â€” skipping metrics JSON save to avoid orphan default_metrics.json")
             return {
                 "results": results,
                 "best_model": best_model_name,
@@ -865,7 +892,7 @@ def train_all_models(standard=None, norme_id=None, dataset_type='classification'
                 best_model_name = name
 
             model_path = os.path.join(MODELS_DIR, f"{sanitize_standard(standard)}_{name}.pkl")
-            joblib.dump(model, model_path)
+            _save_model_with_backup(model, model_path)
 
             overfitting_gap   = train_metrics['accuracy'] - accuracy
             overfitting_level = 'HIGH' if overfitting_gap >= 0.15 else ('MEDIUM' if overfitting_gap >= 0.08 else 'LOW')
@@ -911,7 +938,7 @@ def train_all_models(standard=None, norme_id=None, dataset_type='classification'
                 "feature_importance": [],
             }
 
-    # ── BiLSTM — same dataset and split as RF/LR/GB ──────────────────────────
+    # â”€â”€ BiLSTM â€” same dataset and split as RF/LR/GB â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # BiLSTM previously used a separate simple train_test_split on the text
     # dataset.  We now use the identical split (train_idx / test_idx) already
     # computed above so all four algorithms are evaluated on the same hold-out
@@ -923,7 +950,7 @@ def train_all_models(standard=None, norme_id=None, dataset_type='classification'
 
     if not _BILSTM_AVAILABLE:
         results["BiLSTM"] = {
-            "error": "BiLSTM unavailable — sentence-transformers/PyTorch DLL not loaded.",
+            "error": "BiLSTM unavailable â€” sentence-transformers/PyTorch DLL not loaded.",
             "accuracy": None,
             "precision": None,
             "recall": None,
@@ -939,7 +966,7 @@ def train_all_models(standard=None, norme_id=None, dataset_type='classification'
             import time as _time
             _bilstm_start = _time.time()
 
-            # ── Grouped split — prevent same-document leakage ─────────────────
+            # â”€â”€ Grouped split â€” prevent same-document leakage â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             # CRITICAL FIX: use GroupShuffleSplit with document_ids (groups_text)
             # so that all rules from the same document stay in the same split.
             # Without this, the model sees near-identical texts in both train
@@ -954,7 +981,7 @@ def train_all_models(standard=None, norme_id=None, dataset_type='classification'
                     np.arange(len(X_text)), _y_t, groups=_g_t
                 )
             else:
-                # Too few unique documents — fall back to stratified split
+                # Too few unique documents â€” fall back to stratified split
                 # (acceptable for very small datasets, note leakage risk)
                 _tr_t, _v_t, _te_t = _split_train_validation_test(
                     np.arange(len(X_text)), _y_t, groups=None
@@ -965,7 +992,7 @@ def train_all_models(standard=None, norme_id=None, dataset_type='classification'
             y_text_train = _y_t[_tr_t]
             y_text_test  = _y_t[_te_t]
 
-            # ── Leakage guard: abort if same document appears in train AND test ──
+            # â”€â”€ Leakage guard: abort if same document appears in train AND test â”€â”€
             train_docs_set = set(_g_t[_tr_t].tolist())
             test_docs_set  = set(_g_t[_te_t].tolist())
             leaked_docs    = train_docs_set & test_docs_set
@@ -985,8 +1012,8 @@ def train_all_models(standard=None, norme_id=None, dataset_type='classification'
             bilstm = BiLSTMClassifier(
                 embedding_dim=128,     # compact embedding keeps training fast
                 hidden_dim=128,        # sufficient hidden capacity for evidence texts
-                num_layers=1,          # single BiLSTM layer — fast, no gradient issues
-                dropout=0.35,          # moderate dropout — prevents memorisation
+                num_layers=1,          # single BiLSTM layer â€” fast, no gradient issues
+                dropout=0.35,          # moderate dropout â€” prevents memorisation
                 weight_decay=1e-4,     # L2 regularisation via AdamW
                 patience=5,            # early stopping patience on val_loss
             )
@@ -1027,7 +1054,7 @@ def train_all_models(standard=None, norme_id=None, dataset_type='classification'
                 best_model_name = "BiLSTM"
 
             model_path = os.path.join(MODELS_DIR, f"{sanitize_standard(standard)}_BiLSTM.pkl")
-            joblib.dump(bilstm, model_path)
+            _save_model_with_backup(bilstm, model_path)
             bilstm_trained_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             results["BiLSTM"] = {
@@ -1083,7 +1110,7 @@ def train_all_models(standard=None, norme_id=None, dataset_type='classification'
 
     print(f"\n=== Training Complete ===")
 
-    # ── Select best model by F1 (primary) then Accuracy ──────────────────────
+    # â”€â”€ Select best model by F1 (primary) then Accuracy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # Override the accuracy-based best_model_name computed during the loop.
     _trained = {
         n: r for n, r in results.items()
@@ -1102,7 +1129,7 @@ def train_all_models(standard=None, norme_id=None, dataset_type='classification'
                     abs(r.get('f1_score', 0) - _top_f1) <= 0.0001 and
                     abs(r.get('accuracy',  0) - _top_acc) <= 0.0001]
         if len(_tied) > 1:
-            best_model_name = 'Tie'   # explicit tie — no arbitrary default
+            best_model_name = 'Tie'   # explicit tie â€” no arbitrary default
             for n in _tied:
                 results[n]['is_best'] = True
                 results[n]['is_tie']  = True
@@ -1112,9 +1139,9 @@ def train_all_models(standard=None, norme_id=None, dataset_type='classification'
     else:
         best_model_name = None  # no model trained successfully
 
-    # ── Persist metrics to JSON ───────────────────────────────────────────────
+    # â”€â”€ Persist metrics to JSON â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if not standard:
-        print("Warning: standard is None — skipping metrics JSON save to avoid orphan default_metrics.json")
+        print("Warning: standard is None â€” skipping metrics JSON save to avoid orphan default_metrics.json")
         return {
             "results": results,
             "best_model": best_model_name,
@@ -1216,3 +1243,4 @@ def train_all_models(standard=None, norme_id=None, dataset_type='classification'
         "dataset_warning":         dataset_warning,
         "dataset_quality":         dataset_quality,
     }
+

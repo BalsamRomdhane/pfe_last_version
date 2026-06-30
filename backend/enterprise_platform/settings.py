@@ -243,6 +243,19 @@ REST_FRAMEWORK = {
         'rest_framework.filters.SearchFilter',
         'rest_framework.filters.OrderingFilter',
     ],
+    # ── Rate limiting ─────────────────────────────────────────────────────────
+    # AnonRateThrottle  : unauthenticated callers (brute-force protection)
+    # UserRateThrottle  : authenticated users
+    # LoginRateThrottle : applied only to the login endpoint (see views.py)
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon':  '100/hour',
+        'user':  '1000/hour',
+        'login': '10/minute',   # LoginRateThrottle applied in LoginView
+    },
 }
 
 import os
@@ -325,6 +338,23 @@ SESSION_COOKIE_SAMESITE = 'Lax'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# ── Cache backend (used by DRF throttling) ────────────────────────────────────
+# Uses LocMemCache by default (dev-friendly, no external service needed).
+# Production upgrade: set CACHE_BACKEND=django.core.cache.backends.db.DatabaseCache
+# and run: python manage.py createcachetable
+_cache_backend = os.getenv('CACHE_BACKEND', 'django.core.cache.backends.locmem.LocMemCache')
+CACHES = {
+    'default': {
+        'BACKEND':  _cache_backend,
+        'LOCATION': os.getenv('CACHE_LOCATION', 'compliance-cache'),
+    }
+}
+
+# ── Security headers (non-SSL settings; SSL-specific ones already above) ──────
+# These headers protect against common web vulnerabilities.
+# They are safe to enable in both development and production.
+SECURE_REFERRER_POLICY = 'strict-origin-when-cross-origin'
 
 # Logging Configuration
 LOGGING = {

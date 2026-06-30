@@ -1,9 +1,10 @@
-import json
+﻿import json
 import logging
 import os
 import re
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
+from django.core.cache import cache
 from django.db import ProgrammingError, connection, transaction
 from django.utils import timezone
 from rest_framework import status, viewsets
@@ -13,6 +14,9 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.views import APIView
+
+# Cache TTL for dashboard aggregate endpoints (seconds)
+_DASHBOARD_CACHE_TTL = 120   # 2 minutes
 
 
 def _table_exists(table_name: str) -> bool:
@@ -40,7 +44,7 @@ from .serializers import (
     TrainingSampleSerializer,
     RuleTrainingSampleSerializer,
 )
-from .utils import extract_text, extract_features, compute_score
+from .utils import extract_text, extract_features, compute_score, validate_uploaded_file
 from .utils_dataset import generate_all_iso9001_datasets, export_datasets_for_norm
 from ml.dataset_builder import buildTrainingDataset, sync_training_samples_from_evidence
 from authentication.permissions import IsAdmin, IsTeamLead, IsTeamLeadOrAdmin, IsEmployee
@@ -104,7 +108,7 @@ def recalculate_document_status(document):
 
     if document.status != new_status:
         document.status = new_status
-        document.save(update_fields=['status'])  # explicit — triggers signal with update_fields hint
+        document.save(update_fields=['status'])  # explicit â€” triggers signal with update_fields hint
 
     return new_status
 
@@ -121,6 +125,9 @@ class ExtractFeaturesView(APIView):
             raise ValidationError({'file': 'This field is required.'})
         if not norme_id:
             raise ValidationError({'standard': 'This field is required.'})
+
+        # Server-side file validation (extension + size + content-type)
+        validate_uploaded_file(document_file)
 
         # Try to get norme by ID or name
         try:
@@ -252,11 +259,32 @@ class DocumentViewSet(viewsets.ModelViewSet):
         if 'EMPLOYEE' not in [str(role).upper() for role in getattr(user, 'roles', []) or []]:
             raise PermissionDenied('Only employees can submit documents.')
 
-        serializer.save(
+        # Server-side file validation before saving
+        uploaded_file = self.request.FILES.get('file')
+        validate_uploaded_file(uploaded_file)
+
+        document = serializer.save(
             employee_username=user.username,
             employee_department=getattr(user, 'department', None) or '',
             status=Document.Status.PENDING,
         )
+
+        # Compliance audit log on document creation
+        try:
+            from compliance.services import create_audit_log
+            create_audit_log(
+                entity_type='Document',
+                entity_id=document.pk,
+                action='CREATE',
+                performed_by=user.username,
+                new_value={
+                    'status':     Document.Status.PENDING,
+                    'norme':      document.norme.name if document.norme else '',
+                    'department': document.employee_department,
+                },
+            )
+        except Exception as exc:
+            logger.warning('Could not create AuditLog for new document #%s: %s', document.pk, exc)
 
     @action(detail=True, methods=['get'], url_path='rules')
     def rules(self, request, pk=None):
@@ -350,7 +378,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
             elif document.status == Document.Status.REVIEWING:
                 _notify_validation_required(document)
         except Exception:
-            pass  # notifications are non-critical — never break the main flow
+            pass  # notifications are non-critical â€” never break the main flow
 
         serializer = self.get_serializer(document)
         return Response({
@@ -360,24 +388,37 @@ class DocumentViewSet(viewsets.ModelViewSet):
         })
 
     def _sync_direct_validations(self, document, status_value, teamlead_username):
-        """Create or update validations for every rule during direct approval/rejection."""
+        """
+        Create synthetic validations for every rule during a direct approval/rejection
+        (i.e. when the TeamLead uses the status dropdown instead of the rule-by-rule form).
+
+        These validations are marked with a standard prefix so downstream ML pipelines
+        can filter them out and avoid training on auto-generated evidence text.
+        The prefix ``[AUTO]`` makes the synthetic origin machine-detectable.
+        """
         rules = document.norme.rules.all()
         is_valid_default = (status_value == Document.Status.APPROVED)
-        
+
         if is_valid_default:
-            evidence_text = "Document valide directement par le teamlead - toutes les regles conformes."
+            evidence_text = (
+                '[AUTO] Document approved directly by teamlead â€” '
+                'all rules considered compliant without individual review.'
+            )
         else:
-            evidence_text = "Document rejete directement par le teamlead - non-conformite detectee."
-        
+            evidence_text = (
+                '[AUTO] Document rejected directly by teamlead â€” '
+                'non-compliance detected without individual rule assessment.'
+            )
+
         for rule in rules:
             Validation.objects.update_or_create(
                 document=document,
                 rule=rule,
                 defaults={
                     'teamlead_username': teamlead_username,
-                    'evidence_text': evidence_text,
-                    'is_valid': is_valid_default,
-                }
+                    'evidence_text':     evidence_text,
+                    'is_valid':          is_valid_default,
+                },
             )
 
 
@@ -396,7 +437,12 @@ class ValidationViewSet(viewsets.ModelViewSet):
         roles = [str(role).upper() for role in getattr(user, 'roles', []) or []]
         if 'ADMIN' in roles:
             return self.queryset
-        return self.queryset.filter(document__employee_department=user.department)
+        if 'TEAMLEAD' in roles:
+            return self.queryset.filter(document__employee_department=user.department)
+        if 'EMPLOYEE' in roles:
+            # Employees may only see validations on their own documents
+            return self.queryset.filter(document__employee_username=user.username)
+        return self.queryset.none()
 
     def recalculate_document_status(self, document):
         return recalculate_document_status(document)
@@ -405,16 +451,71 @@ class ValidationViewSet(viewsets.ModelViewSet):
         if final_decision not in [Document.Status.APPROVED, Document.Status.REJECTED]:
             raise ValidationError({'final_decision': 'Invalid final decision. Must be "approved" or "rejected".'})
 
-        document.final_decision = final_decision
-        document.decision_reason = decision_reason or document.decision_reason
-        document.reviewer_comment = reviewer_comment or document.reviewer_comment
-        document.approved_by = reviewer_username or document.approved_by
-        document.approved_at = timezone.now()
+        document.final_decision      = final_decision
+        document.decision_reason     = decision_reason or document.decision_reason
+        document.reviewer_comment    = reviewer_comment or document.reviewer_comment
+        document.approved_by         = reviewer_username or document.approved_by
+        document.approved_at         = timezone.now()
         document.review_completed_at = timezone.now()
-        document.is_finalized = True
-        document.status = final_decision
-        document.teamlead_username = reviewer_username or document.teamlead_username
-        document.save(update_fields=['final_decision', 'decision_reason', 'reviewer_comment', 'approved_by', 'approved_at', 'review_completed_at', 'is_finalized', 'status', 'teamlead_username'])
+        document.is_finalized        = True
+        document.status              = final_decision
+        document.teamlead_username   = reviewer_username or document.teamlead_username
+        document.save(update_fields=[
+            'final_decision', 'decision_reason', 'reviewer_comment',
+            'approved_by', 'approved_at', 'review_completed_at',
+            'is_finalized', 'status', 'teamlead_username',
+        ])
+
+        # â”€â”€ Create document version snapshot â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # DocumentVersion exists in compliance.models but was never populated.
+        # We create one here so the audit trail has a point-in-time snapshot
+        # of the document state at the moment of final decision.
+        try:
+            from compliance.models import DocumentVersion
+            last_version = (
+                DocumentVersion.objects
+                .filter(document=document)
+                .order_by('-version_number')
+                .values_list('version_number', flat=True)
+                .first()
+            ) or 0
+            DocumentVersion.objects.create(
+                document=document,
+                version_number=last_version + 1,
+                is_current=True,
+                snapshot={
+                    'status':          final_decision,
+                    'decision_reason': decision_reason,
+                    'reviewer_comment': reviewer_comment,
+                    'approved_by':     reviewer_username,
+                    'norme':           document.norme.name if document.norme else '',
+                    'employee':        document.employee_username,
+                    'department':      document.employee_department,
+                },
+                changed_by=reviewer_username or '',
+                change_reason=f'Document {final_decision} by {reviewer_username}',
+            )
+            # Mark older versions as non-current
+            DocumentVersion.objects.filter(
+                document=document
+            ).exclude(version_number=last_version + 1).update(is_current=False)
+        except Exception as exc:
+            logger.warning('Could not create DocumentVersion for doc #%s: %s', document.pk, exc)
+
+        # â”€â”€ Compliance audit log â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        try:
+            from compliance.services import create_audit_log
+            action_code = 'APPROVE' if final_decision == Document.Status.APPROVED else 'REJECT'
+            create_audit_log(
+                entity_type='Document',
+                entity_id=document.pk,
+                action=action_code,
+                performed_by=reviewer_username or '',
+                new_value={'status': final_decision, 'reason': decision_reason},
+                reason=decision_reason,
+            )
+        except Exception as exc:
+            logger.warning('Could not create compliance AuditLog for doc #%s: %s', document.pk, exc)
 
         try:
             sample = TrainingSample.objects.get(document=document)
@@ -424,23 +525,25 @@ class ValidationViewSet(viewsets.ModelViewSet):
         except TrainingSample.DoesNotExist:
             pass
 
-        RuleTrainingSample.objects.filter(document=document).update(final_document_decision=final_decision)
+        RuleTrainingSample.objects.filter(document=document).update(
+            final_document_decision=final_decision
+        )
 
     def perform_create(self, serializer):
         validation = serializer.save(teamlead_username=self.request.user.username)
         self.recalculate_document_status(validation.document)
-        create_training_sample(validation.document)
+        # NOTE: create_training_sample is NOT called here â€” the post_save signal
+        # on Validation already handles it. Calling it again would cause a double
+        # write and potential metric drift in the training dataset.
         try:
-            # regenerate datasets for the norme of this document
             export_datasets_for_norm(validation.document.norme)
         except Exception:
-            # do not break validation flow on dataset generation errors
             pass
 
     def perform_update(self, serializer):
         validation = serializer.save()
         self.recalculate_document_status(validation.document)
-        create_training_sample(validation.document)
+        # Same reasoning: training sample update is handled by the post_save signal.
         try:
             export_datasets_for_norm(validation.document.norme)
         except Exception:
@@ -540,7 +643,7 @@ class ValidationViewSet(viewsets.ModelViewSet):
         document.teamlead_username = request.user.username
         document.save(update_fields=['teamlead_username'])
 
-        # Use already-loaded validations to compute compliance — no extra SQL queries
+        # Use already-loaded validations to compute compliance â€” no extra SQL queries
         all_validations = list(Validation.objects.filter(document=document).select_related('rule'))
         valid_count   = sum(1 for v in all_validations if v.is_valid)
         total_rules   = document.norme.rules.count()
@@ -578,7 +681,7 @@ def train_model_api(request):
     error = _load_ml_training_modules()
     if error is not None or train_model is None:
         return Response(
-            {'error': 'ML training unavailable — install Visual C++ Redistributable 2019 and restart the server.'},
+            {'error': 'ML training unavailable â€” install Visual C++ Redistributable 2019 and restart the server.'},
             status=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
     standard = request.data.get('standard')
@@ -602,7 +705,7 @@ def train_models_api(request):
     error = _load_ml_training_modules()
     if error is not None or train_all_models is None:
         return Response(
-            {'error': 'ML training unavailable — install Visual C++ Redistributable 2019 and restart the server.'},
+            {'error': 'ML training unavailable â€” install Visual C++ Redistributable 2019 and restart the server.'},
             status=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
     standard = request.data.get('standard')
@@ -640,7 +743,7 @@ def semantic_search_api(request):
         result = engine.search(query=query.strip(), standard=standard, top_k=top_k)
         return Response(result)
     except (ImportError, OSError, RuntimeError) as exc:
-        # sentence-transformers / FAISS not available — degrade gracefully
+        # sentence-transformers / FAISS not available â€” degrade gracefully
         return _tfidf_fallback_search(query.strip(), standard, top_k)
     except Exception as exc:
         return Response({'error': str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -679,9 +782,9 @@ def _tfidf_fallback_search(query: str, standard, top_k: int):
         seen_docs.add(doc_id)
         results.append({
             'document_id':    doc_id or 0,
-            'document_name':  f"Document #{doc_id}" if doc_id else '—',
+            'document_name':  f"Document #{doc_id}" if doc_id else 'â€”',
             'standard':       sample.norm.name if sample.norm else standard,
-            'status':         sample.final_document_decision or sample.label or '—',
+            'status':         sample.final_document_decision or sample.label or 'â€”',
             'hybrid_score':   0.0,
             'semantic_score': 0.0,
             'bm25_score':     0.0,
@@ -697,7 +800,7 @@ def _tfidf_fallback_search(query: str, standard, top_k: int):
         'total_documents': len(results),
         'results':         results,
         'fallback':        True,
-        'message':         'Using keyword fallback — sentence-transformers unavailable.',
+        'message':         'Using keyword fallback â€” sentence-transformers unavailable.',
     })
 
 
@@ -745,7 +848,7 @@ class RuleTrainingSampleViewSet(viewsets.ModelViewSet):
         document_id = self.request.query_params.get('document')
         label    = self.request.query_params.get('label')
 
-        # Build a fresh queryset — avoids class-level queryset mutation with select_related + pagination
+        # Build a fresh queryset â€” avoids class-level queryset mutation with select_related + pagination
         qs = RuleTrainingSample.objects.all()
 
         if norm_id:
@@ -835,7 +938,7 @@ def dataset_stats_api(request):
     standard     = request.query_params.get('standard')
     dataset_type = str(request.query_params.get('dataset_type', 'classification')).lower()
 
-    # ── Resolve norm ──────────────────────────────────────────────────────────
+    # â”€â”€ Resolve norm â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     selected_norm = None
     if norm_id:
         try:
@@ -1203,7 +1306,7 @@ def ml_train_api(request):
     error = _load_ml_training_modules()
     if error is not None or train_all_models is None:
         return Response(
-            {'error': 'ML training unavailable — install Visual C++ Redistributable 2019 and restart the server.'},
+            {'error': 'ML training unavailable â€” install Visual C++ Redistributable 2019 and restart the server.'},
             status=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
     standard = request.data.get('standard')
@@ -1229,7 +1332,7 @@ def ml_train_api(request):
         if 'error' in result:
             return Response(result, status=status.HTTP_400_BAD_REQUEST)
 
-        # ── Persist training outcome to DB (single source of truth) ──────────
+        # â”€â”€ Persist training outcome to DB (single source of truth) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         # This mirrors what ci/update_training_job.py does for Jenkins runs,
         # ensuring that local (API-triggered) training is also reflected in
         # MLOps dashboard, AIInsights timeline, and StandardCard metrics.
@@ -1255,7 +1358,7 @@ def ml_models_api(request):
     - best_model is selected by F1 (primary) then accuracy (tiebreaker).
       When two models are exactly tied it is set to "Tie".
     - A model whose error field is non-empty is marked status="Failed".
-    - No fallback values — the frontend must display "—" for None.
+    - No fallback values â€” the frontend must display "â€”" for None.
     """
     import os, json as _json, datetime as _dt
 
@@ -1285,7 +1388,7 @@ def ml_models_api(request):
         return Response({'models': [{'name': a, 'exists': False} for a in allowed_algos],
                          'best_model': None})
 
-    # ── Load persisted metrics ────────────────────────────────────────────────
+    # â”€â”€ Load persisted metrics â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     persisted_metrics = {}
     persisted_meta    = {}   # top-level fields: trained_at, samples, dataset_quality
     if standard_name:
@@ -1307,7 +1410,7 @@ def ml_models_api(request):
             except Exception:
                 pass
 
-    # ── Normalize .pkl filenames to algorithm names ───────────────────────────
+    # â”€â”€ Normalize .pkl filenames to algorithm names â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _normalize(raw: str) -> str:
         cleaned = raw
         if standard_prefix and cleaned.startswith(standard_prefix):
@@ -1324,7 +1427,7 @@ def ml_models_api(request):
             return parts[-1]
         return raw
 
-    # Build initial dict — all models start as "not found"
+    # Build initial dict â€” all models start as "not found"
     model_info = {
         algo: {
             'name': algo, 'id': algo, 'exists': False, 'path': None,
@@ -1359,7 +1462,7 @@ def ml_models_api(request):
                 'id':                algorithm,
                 'exists':            True,
                 'path':              fpath,
-                # Real metrics from JSON — None when absent (not 0)
+                # Real metrics from JSON â€” None when absent (not 0)
                 'accuracy':          pm.get('accuracy'),     # may be None
                 'precision':         pm.get('precision'),
                 'recall':            pm.get('recall'),
@@ -1389,7 +1492,7 @@ def ml_models_api(request):
 
     models_list = list(model_info.values())
 
-    # ── Compute best model by F1 → Accuracy (same logic as train_models.py) ──
+    # â”€â”€ Compute best model by F1 â†’ Accuracy (same logic as train_models.py) â”€â”€
     # Use the JSON value when available (already computed with same rule);
     # recompute from the metrics list as a fallback.
     best_name = best_model_from_json  # "Tie" or an algorithm name or None
@@ -1425,7 +1528,7 @@ def ml_models_api(request):
             m['is_best'] = False
             m['is_tie']  = False
 
-    # ── Status label ──────────────────────────────────────────────────────────
+    # â”€â”€ Status label â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     for m in models_list:
         if m.get('error'):
             m['status']  = 'Failed'
@@ -1449,13 +1552,13 @@ def ml_models_api(request):
             else:
                 m['status'] = 'Poor'
 
-    # ── Overfitting / reliability warning ────────────────────────────────────
+    # â”€â”€ Overfitting / reliability warning â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     for m in models_list:
         acc = m.get('accuracy')
         f1  = m.get('f1_score')
         n   = m.get('sample_count') or 0
         if acc is not None and f1 is not None and acc >= 0.999 and f1 >= 0.999 and n < 50:
-            m['warning']  = 'Perfect score on tiny dataset — likely overfitted.'
+            m['warning']  = 'Perfect score on tiny dataset â€” likely overfitted.'
             m['reliable'] = False
         elif m.get('trained'):
             m['reliable'] = True
@@ -1469,7 +1572,7 @@ def ml_models_api(request):
     })
 
 
-# ===== NOUVELLES VUES POUR L'ANALYSE DE CONFORMITÉ NLP =====
+# ===== NOUVELLES VUES POUR L'ANALYSE DE CONFORMITÃ‰ NLP =====
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -1487,7 +1590,7 @@ def analyze_document_compliance_api(request):
     - file: Document file (PDF/DOCX)
     - standard: ISO standard (optional)
     """
-    # Try to load compliance_service — may fail if spacy/torch DLL unavailable
+    # Try to load compliance_service â€” may fail if spacy/torch DLL unavailable
     try:
         from ml.services import compliance_service
         _compliance_service = compliance_service
@@ -1540,7 +1643,7 @@ def analyze_document_compliance_api(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Primary: ComplianceEngine (keyword/pattern matching — no torch dependency)
+        # Primary: ComplianceEngine (keyword/pattern matching â€” no torch dependency)
         if norme:
             from compliance_engine import ComplianceEngine
             engine = ComplianceEngine()
@@ -1584,7 +1687,7 @@ def get_supported_standards_api(request):
         standards = compliance_service.get_supported_standards()
         return Response({'standards': standards}, status=status.HTTP_200_OK)
     except (ImportError, OSError, Exception):
-        # Fallback — return standards from DB norms
+        # Fallback â€” return standards from DB norms
         standards = list(Norme.objects.values_list('name', flat=True))
         return Response({'standards': standards}, status=status.HTTP_200_OK)
 
@@ -1598,7 +1701,7 @@ def get_standard_rules_api(request, standard):
         rules = compliance_service.get_standard_rules(standard)
         return Response({'standard': standard, 'rules': rules, 'total_rules': len(rules)}, status=status.HTTP_200_OK)
     except (ImportError, OSError):
-        # Fallback — return rules from DB
+        # Fallback â€” return rules from DB
         norme = Norme.objects.filter(name__iexact=standard).first() or Norme.objects.filter(name__icontains=standard).first()
         if norme:
             rules = [{'id': r.id, 'title': r.title, 'description': r.description} for r in norme.rules.all()]
@@ -1619,7 +1722,7 @@ def retrain_compliance_models_api(request):
         return Response(result, status=status.HTTP_200_OK)
     except (ImportError, OSError):
         return Response(
-            {'error': 'ML service unavailable — spacy/torch DLL not loaded. Install Visual C++ Redistributable 2019.'},
+            {'error': 'ML service unavailable â€” spacy/torch DLL not loaded. Install Visual C++ Redistributable 2019.'},
             status=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
     except Exception as e:
@@ -1661,7 +1764,7 @@ def get_compliance_service_status_api(request):
     except (ImportError, OSError):
         return Response({
             'status': 'degraded',
-            'message': 'ML service unavailable — spacy/torch DLL not loaded.',
+            'message': 'ML service unavailable â€” spacy/torch DLL not loaded.',
             'fallback': 'ComplianceEngine (keyword matching) is active.',
         }, status=status.HTTP_200_OK)
     except Exception as e:
@@ -1733,10 +1836,10 @@ def ml_test_document_api(request):
             is_valid = bool(r.get('is_valid', False))
             confidence_val = 85.0 if is_valid else 20.0
             rules_list.append({
-                'rule':       r.get('title') or r.get('rule') or '—',
+                'rule':       r.get('title') or r.get('rule') or 'â€”',
                 'prediction': 'COMPLIANT' if is_valid else 'NON-COMPLIANT',
                 'confidence': round(confidence_val, 1),
-                'evidence':   r.get('evidence') or ('Règle vérifiée' if is_valid else 'Règle non satisfaite'),
+                'evidence':   r.get('evidence') or ('RÃ¨gle vÃ©rifiÃ©e' if is_valid else 'RÃ¨gle non satisfaite'),
             })
 
         logger.info("[ML_TEST] EVIDENCE_FOUND=%d", len([r for r in rules_list if r['evidence']]))
@@ -1759,17 +1862,17 @@ def ml_test_document_api(request):
                     logger.info("[ML_TEST] MODEL_LOADED=%s", algo)
 
                     if hasattr(loaded_model, 'named_steps'):
-                        # TF-IDF sklearn Pipeline — pass raw text
+                        # TF-IDF sklearn Pipeline â€” pass raw text
                         proba = loaded_model.predict_proba([document_text])[0]
                         pred  = int(loaded_model.predict([document_text])[0])
                     elif hasattr(loaded_model, 'predict_proba'):
-                        # Direct classifier — build evidence feature vector same way as training
+                        # Direct classifier â€” build evidence feature vector same way as training
                         # Use _vectorize_evidence_sample logic: 8 features
                         import numpy as _np
                         words = document_text.split()
                         token_count = len(words)
                         has_ref = int(any(kw in document_text.lower() for kw in [
-                            'ref.', 'référence', 'certif', 'iso', 'version', 'approuv',
+                            'ref.', 'rÃ©fÃ©rence', 'certif', 'iso', 'version', 'approuv',
                             'valid', 'conforme', 'audit', 'procedure', 'politique',
                         ]))
                         has_neg = int(any(kw in document_text.lower() for kw in [
@@ -1777,8 +1880,8 @@ def ml_test_document_api(request):
                             'insuffisant', 'non conforme', 'jamais',
                         ]))
                         has_pos = int(any(kw in document_text.lower() for kw in [
-                            'conforme', 'approuvé', 'validé', 'présent', 'disponible',
-                            'opérationnel', 'certifié', 'implémenté',
+                            'conforme', 'approuvÃ©', 'validÃ©', 'prÃ©sent', 'disponible',
+                            'opÃ©rationnel', 'certifiÃ©', 'implÃ©mentÃ©',
                         ]))
                         has_date = int(bool(__import__('re').search(r'\d{2}/\d{2}/\d{4}', document_text)))
                         fvec = [
@@ -1949,7 +2052,7 @@ def ml_train_evidence_api(request):
     """Build and persist the evidence FAISS index from RuleTrainingSample rows."""
     if build_and_persist_evidence_index is None:
         return Response(
-            {'error': 'Indexing unavailable — install Visual C++ Redistributable 2019 and restart the server.'},
+            {'error': 'Indexing unavailable â€” install Visual C++ Redistributable 2019 and restart the server.'},
             status=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
     standard = request.data.get('standard')
@@ -1993,7 +2096,7 @@ def evidence_index_api(request):
         except Exception as e:
             pass  # fall through to lightweight index
 
-    # Lightweight fallback — persist a simple metadata file so evidence/status returns real data
+    # Lightweight fallback â€” persist a simple metadata file so evidence/status returns real data
     import os, json as _json
     from django.utils import timezone as tz
 
@@ -2025,7 +2128,7 @@ def evidence_index_api(request):
             _json.dump(meta, f, indent=2, default=str)
 
         return Response({
-            'message': f'Evidence index built (TF-IDF fallback) — {total} records indexed.',
+            'message': f'Evidence index built (TF-IDF fallback) â€” {total} records indexed.',
             'metadata': meta,
             'note': 'Install Visual C++ Redistributable 2019 and restart to enable full FAISS indexing.',
         }, status=status.HTTP_200_OK)
@@ -2042,7 +2145,7 @@ def evidence_status_api(request):
     Accepts optional ?norm_name= or ?norm_id= to filter per-norm stats.
     When a norm is specified, counts are scoped to that norm only.
     """
-    # ── Resolve optional norm filter ──────────────────────────────────────
+    # â”€â”€ Resolve optional norm filter â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     norm_name = request.query_params.get('norm_name') or request.query_params.get('standard')
     norm_id   = request.query_params.get('norm_id')
     norme_obj = None
@@ -2058,7 +2161,7 @@ def evidence_status_api(request):
             or Norme.objects.filter(name__icontains=norm_name).first()
         )
 
-    # ── Base queryset — scoped or global ──────────────────────────────────
+    # â”€â”€ Base queryset â€” scoped or global â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     qs = RuleTrainingSample.objects.all()
     if norme_obj:
         qs = qs.filter(norm=norme_obj)
@@ -2088,7 +2191,7 @@ def evidence_status_api(request):
     if norme_obj:
         total_rules = norme_obj.rules.count()
 
-    # ── FAISS index metadata (global — index covers all norms) ─────────────
+    # â”€â”€ FAISS index metadata (global â€” index covers all norms) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     meta = None
     if load_evidence_index_metadata is not None:
         try:
@@ -2105,7 +2208,7 @@ def evidence_status_api(request):
         last_trained    = meta.get('last_trained') if meta else None
         vector_dim      = meta.get('vector_dim') if meta else None
     else:
-        # Global: use total evidence count as "indexed" — FAISS may not be built
+        # Global: use total evidence count as "indexed" â€” FAISS may not be built
         # but all records are available as the knowledge base
         indexed         = total
         embedding_model = (meta.get('embedding_model') if meta else None) or 'tfidf-fallback'
@@ -2262,7 +2365,7 @@ def evidence_deduplicate_api(request):
     for sample in qs:
         text_key = (sample.evidence_text or '').strip()
         if not text_key:
-            # Keep empty texts — don't consider them duplicates of each other
+            # Keep empty texts â€” don't consider them duplicates of each other
             continue
         if text_key in seen_texts:
             to_delete.append(sample.id)
@@ -2298,19 +2401,19 @@ def rule_memory_api(request):
     """
     Knowledge base endpoint with full pagination, filtering, sorting and export.
     GET params:
-      page, page_size — pagination
-      norm_id, norm_name — filter by norm
-      rule — filter by rule title (partial match)
-      label — filter by label (approved/rejected)
-      search — full-text search in evidence_text + reviewer_comment
-      sort — newest|oldest|rule|label (default: newest)
-      export — csv|json (returns file download)
+      page, page_size â€” pagination
+      norm_id, norm_name â€” filter by norm
+      rule â€” filter by rule title (partial match)
+      label â€” filter by label (approved/rejected)
+      search â€” full-text search in evidence_text + reviewer_comment
+      sort â€” newest|oldest|rule|label (default: newest)
+      export â€” csv|json (returns file download)
     """
     try:
-        # FIXED: use order_by('-id') — avoids broken subquery with select_related + cross-JOIN
+        # FIXED: use order_by('-id') â€” avoids broken subquery with select_related + cross-JOIN
         qs = RuleTrainingSample.objects.select_related('rule', 'norm').order_by('-id')
 
-        # ── Filters ──────────────────────────────────────────────────────────
+        # â”€â”€ Filters â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         norm_id   = request.query_params.get('norm_id')
         norm_name = request.query_params.get('norm_name')
         rule_q    = request.query_params.get('rule', '').strip()
@@ -2338,7 +2441,7 @@ def rule_memory_api(request):
                 Q(recommendation__icontains=search_q)
             )
 
-        # ── Sorting ───────────────────────────────────────────────────────────
+        # â”€â”€ Sorting â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         sort_map = {
             'newest': '-id',
             'oldest': 'id',
@@ -2349,7 +2452,7 @@ def rule_memory_api(request):
 
         total = qs.count()
 
-        # ── Export ────────────────────────────────────────────────────────────
+        # â”€â”€ Export â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         export_fmt = request.query_params.get('export', '').lower()
         if export_fmt in ('csv', 'json'):
             import csv, io
@@ -2375,7 +2478,7 @@ def rule_memory_api(request):
                 resp['Content-Disposition'] = 'attachment; filename="evidence_dataset.csv"'
                 return resp
 
-        # ── Pagination ────────────────────────────────────────────────────────
+        # â”€â”€ Pagination â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         try:
             page = max(1, int(request.query_params.get('page', 1)))
         except Exception:
@@ -2391,7 +2494,7 @@ def rule_memory_api(request):
 
         serializer = RuleTrainingSampleSerializer(items, many=True, context={'request': request})
 
-        # ── Aggregates for filter dropdowns ───────────────────────────────────
+        # â”€â”€ Aggregates for filter dropdowns â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         # Scope rule options to the current norm filter for relevance
         all_rules  = list(qs.values_list('rule_title', flat=True).distinct().order_by('rule_title'))
         all_labels = ['approved', 'rejected']
@@ -2567,22 +2670,33 @@ def search_evidence_api(request):
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# NEW ENDPOINTS — Dashboard Stats, Document Stats, Dataset Quality
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# NEW ENDPOINTS â€” Dashboard Stats, Document Stats, Dataset Quality
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def dashboard_stats_api(request):
     """
-    Aggregated dashboard statistics — replaces all hardcoded values in Dashboard.jsx.
+    Aggregated dashboard statistics â€” replaces all hardcoded values in Dashboard.jsx.
     Returns real counts from the database.
+    Cached per user role + department for 2 minutes to reduce DB load.
     """
     from django.db.models import Count, Avg, Q
     from rbac.models import UserProfile
 
     user = request.user
     roles = [str(r).upper() for r in getattr(user, 'roles', []) or []]
+
+    # Build a role-specific cache key so each user segment sees consistent data
+    _role   = 'ADMIN' if 'ADMIN' in roles else ('TEAMLEAD' if 'TEAMLEAD' in roles else 'EMPLOYEE')
+    _dept   = getattr(user, 'department', '') or 'global'
+    _uname  = getattr(user, 'username', '') or 'anon'
+    _cache_key = f'dashboard_stats_{_role}_{_dept}_{_uname if _role == "EMPLOYEE" else ""}'
+
+    cached = cache.get(_cache_key)
+    if cached is not None:
+        return Response(cached)
 
     # Document queryset scoped by role
     if 'ADMIN' in roles:
@@ -2606,10 +2720,8 @@ def dashboard_stats_api(request):
     approved_docs = (doc_counts['approved'] or 0) + (doc_counts['auto_approved'] or 0)
     compliance_rate = round((approved_docs / total_docs * 100), 1) if total_docs > 0 else 0
 
-    # Norme count
     total_normes = Norme.objects.count()
 
-    # Validation count
     if 'ADMIN' in roles:
         total_validations = Validation.objects.count()
     elif 'TEAMLEAD' in roles:
@@ -2621,20 +2733,15 @@ def dashboard_stats_api(request):
             document__employee_username=user.username
         ).count()
 
-    # Training samples should reflect the canonical labeled training dataset used
-    # by the ML dashboard. Evidence rows stay separate so diagnostics remain accurate.
     total_training_samples = TrainingSample.objects.filter(label__in=['approved', 'rejected']).count()
     total_evidence_samples = RuleTrainingSample.objects.count()
-
-    # User count (admin only)
     total_users = UserProfile.objects.count() if 'ADMIN' in roles else None
 
-    # Recent activity (last 10 documents)
     recent_docs = doc_qs.select_related('norme').order_by('-created_at')[:10]
     recent_activity = [
         {
             'id': d.id,
-            'title': f'Document #{d.id} — {d.norme.name if d.norme else ""}',
+            'title': f'Document #{d.id} â€” {d.norme.name if d.norme else ""}',
             'employee': d.employee_username,
             'status': d.status,
             'time': d.created_at.isoformat(),
@@ -2642,7 +2749,6 @@ def dashboard_stats_api(request):
         for d in recent_docs
     ]
 
-    # Compliance trend (last 7 days)
     from django.utils import timezone as tz
     from datetime import timedelta
     trend = []
@@ -2650,9 +2756,7 @@ def dashboard_stats_api(request):
         day = tz.now().date() - timedelta(days=i)
         day_docs = doc_qs.filter(created_at__date=day)
         day_total = day_docs.count()
-        day_approved = day_docs.filter(
-            status__in=['approved', 'auto_approved']
-        ).count()
+        day_approved = day_docs.filter(status__in=['approved', 'auto_approved']).count()
         trend.append({
             'date': day.isoformat(),
             'total': day_total,
@@ -2660,30 +2764,31 @@ def dashboard_stats_api(request):
             'rate': round(day_approved / day_total * 100, 1) if day_total > 0 else 0,
         })
 
-    return Response({
+    payload = {
         'documents': {
-            'total': total_docs,
-            'approved': approved_docs,
-            'rejected': doc_counts['rejected'] or 0,
-            'pending': doc_counts['pending'] or 0,
+            'total':     total_docs,
+            'approved':  approved_docs,
+            'rejected':  doc_counts['rejected'] or 0,
+            'pending':   doc_counts['pending'] or 0,
             'reviewing': doc_counts['reviewing'] or 0,
         },
-        'compliance_rate': compliance_rate,
-        'total_normes': total_normes,
-        'total_validations': total_validations,
-        'total_training_samples': total_training_samples,
-        'total_evidence_samples': total_evidence_samples,
-        'total_users': total_users,
-        'recent_activity': recent_activity,
-        'compliance_trend': trend,
-    })
-
+        'compliance_rate':         compliance_rate,
+        'total_normes':            total_normes,
+        'total_validations':       total_validations,
+        'total_training_samples':  total_training_samples,
+        'total_evidence_samples':  total_evidence_samples,
+        'total_users':             total_users,
+        'recent_activity':         recent_activity,
+        'compliance_trend':        trend,
+    }
+    cache.set(_cache_key, payload, timeout=_DASHBOARD_CACHE_TTL)
+    return Response(payload)
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def document_stats_api(request):
     """
-    Aggregated document counts by status — replaces 5 separate API calls in Documents.jsx.
+    Aggregated document counts by status â€” replaces 5 separate API calls in Documents.jsx.
     """
     from django.db.models import Count, Q
 
@@ -2714,9 +2819,9 @@ def document_stats_api(request):
     })
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# INNOVATION 3 — Compliance Drift Detection
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# INNOVATION 3 â€” Compliance Drift Detection
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -2725,8 +2830,8 @@ def compliance_drift_api(request):
     Detect compliance drift per department over the last N weeks.
     Returns weekly compliance rates and trend direction.
     GET params:
-      weeks  — number of past weeks to analyse (default: 6)
-      dept   — filter by department code (optional, admin only)
+      weeks  â€” number of past weeks to analyse (default: 6)
+      dept   â€” filter by department code (optional, admin only)
     """
     from django.db.models import Count, Q
     from django.utils import timezone as tz
@@ -2810,7 +2915,7 @@ def compliance_drift_api(request):
         if consecutive_declines >= 3:
             alerts.append({
                 'dept': dept,
-                'message': f'Conformité en baisse depuis {consecutive_declines} semaines.',
+                'message': f'ConformitÃ© en baisse depuis {consecutive_declines} semaines.',
                 'severity': 'critical' if consecutive_declines >= 4 else 'warning',
                 'current_rate': rates[-1] if rates else None,
             })
@@ -2818,9 +2923,9 @@ def compliance_drift_api(request):
     return Response({'departments': results, 'alerts': alerts, 'weeks': weeks})
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# INNOVATION 4 — PDF Compliance Report Generator
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# INNOVATION 4 â€” PDF Compliance Report Generator
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -2867,18 +2972,18 @@ def document_pdf_report_api(request, pk):
     return response
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# INNOVATION 5 — Local Compliance Assistant (Chat)
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# INNOVATION 5 â€” Local Compliance Assistant (Chat)
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def compliance_chat_api(request):
     """
     Local compliance Q&A chatbot.
-    No external AI — answers from FAISS evidence index + RuleTrainingSamples.
+    No external AI â€” answers from FAISS evidence index + RuleTrainingSamples.
 
-    Body: { "question": "Que doit contenir l'en-tête ?" }
+    Body: { "question": "Que doit contenir l'en-tÃªte ?" }
     Optional: { "standard": "ISO9001", "top_k": 5 }
     """
     question = (request.data.get('question') or request.data.get('query') or '').strip()
@@ -2939,7 +3044,7 @@ def compliance_chat_api(request):
     except Exception as e:
         logger.warning('Chat evidence search failed: %s', str(e))
 
-    # Step 2: Keyword fallback — search RuleTrainingSample text
+    # Step 2: Keyword fallback â€” search RuleTrainingSample text
     if len(evidences) < 3:
         from django.db.models import Q as DQ
         # Search with multiple keywords from the question
@@ -2998,21 +3103,21 @@ def compliance_chat_api(request):
     })
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# STREAMING CHAT — SSE token-by-token via Ollama
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# STREAMING CHAT â€” SSE token-by-token via Ollama
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def compliance_chat_stream_api(request):
     """
     Streaming compliance chat via Server-Sent Events (SSE).
-    Returns text/event-stream — each token sent as: data: {"token": "..."}\n\n
+    Returns text/event-stream â€” each token sent as: data: {"token": "..."}\n\n
     Final event: data: {"done": true, "llm_used": ..., "model": ..., "confidence": ...}\n\n
 
     Body: { "question": "...", "standard": "ISO27001", "top_k": 5 }
 
-    NOTE: CSRF is bypassed — auth is via Bearer JWT in Authorization header.
+    NOTE: CSRF is bypassed â€” auth is via Bearer JWT in Authorization header.
     The @api_view decorator with DRF's KeycloakAuthentication handles auth.
     """
     from django.http import StreamingHttpResponse
@@ -3028,7 +3133,7 @@ def compliance_chat_stream_api(request):
     except (TypeError, ValueError):
         top_k = 5
 
-    # ── Retrieve evidence (same logic as compliance_chat_api) ──────────────
+    # â”€â”€ Retrieve evidence (same logic as compliance_chat_api) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     evidences = []
     try:
         from ml.search import load_evidence_index, embed_query_vector
@@ -3103,7 +3208,7 @@ def compliance_chat_stream_api(request):
                 'evidence': s.evidence_text or '', 'decision': s.label, 'score': 40,
             })
 
-    # ── Stream ────────────────────────────────────────────────────────────
+    # â”€â”€ Stream â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     import json as _json
     _user = getattr(request.user, 'username', 'anonymous')
 
@@ -3132,31 +3237,31 @@ def compliance_chat_stream_api(request):
 def _synthesise_chat_answer(question: str, evidences: list, standard: str = '') -> str:
     """
     Build a structured professional compliance answer.
-    Format: Résumé / Analyse / Preuves / Écarts / Recommandations / Confiance
-    100% local — no LLM, no API call.
+    Format: RÃ©sumÃ© / Analyse / Preuves / Ã‰carts / Recommandations / Confiance
+    100% local â€” no LLM, no API call.
     """
 
-    # ── No evidence found ────────────────────────────────────────────────
+    # â”€â”€ No evidence found â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if not evidences:
         return (
-            "**Résumé :**\n"
-            "Information non trouvée dans les documents de conformité.\n\n"
+            "**RÃ©sumÃ© :**\n"
+            "Information non trouvÃ©e dans les documents de conformitÃ©.\n\n"
             "**Analyse :**\n"
             "Je ne trouve pas suffisamment d'informations dans la base documentaire "
-            "pour répondre avec certitude à cette question.\n\n"
+            "pour rÃ©pondre avec certitude Ã  cette question.\n\n"
             "**Recommandations :**\n"
-            "- Assurez-vous que l'index d'évidence a été entraîné via 'Train Memory'\n"
-            "- Vérifiez que des preuves de validation existent pour cette norme\n"
-            "- Reformulez la question avec des termes ISO spécifiques\n\n"
+            "- Assurez-vous que l'index d'Ã©vidence a Ã©tÃ© entraÃ®nÃ© via 'Train Memory'\n"
+            "- VÃ©rifiez que des preuves de validation existent pour cette norme\n"
+            "- Reformulez la question avec des termes ISO spÃ©cifiques\n\n"
             "**Niveau de confiance :** Faible"
         )
 
-    # ── Split approved vs rejected evidence ──────────────────────────────
+    # â”€â”€ Split approved vs rejected evidence â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     approved = [e for e in evidences if e.get('decision') == 'approved' and e.get('score', 0) >= 40]
     rejected = [e for e in evidences if e.get('decision') == 'rejected']
     top_all  = evidences[:5]
 
-    # ── Deduplicate by rule ───────────────────────────────────────────────
+    # â”€â”€ Deduplicate by rule â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     seen_rules = set()
     unique_rules = []
     for e in top_all:
@@ -3165,16 +3270,16 @@ def _synthesise_chat_answer(question: str, evidences: list, standard: str = '') 
             seen_rules.add(rule)
             unique_rules.append(e)
 
-    # ── Confidence level ─────────────────────────────────────────────────
+    # â”€â”€ Confidence level â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     avg_score = sum(e.get('score', 0) for e in top_all) / max(len(top_all), 1)
     if avg_score >= 75 and len(approved) >= 2:
-        confidence = 'Élevé'
+        confidence = 'Ã‰levÃ©'
     elif avg_score >= 50:
         confidence = 'Moyen'
     else:
         confidence = 'Faible'
 
-    # ── Norm context ──────────────────────────────────────────────────────
+    # â”€â”€ Norm context â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     norm_label = standard or (
         evidences[0].get('norm') or
         ('ISO 27001' if 'access' in question.lower() or 'classif' in question.lower() else
@@ -3182,7 +3287,7 @@ def _synthesise_chat_answer(question: str, evidences: list, standard: str = '') 
          'ISO / TISAX')
     )
 
-    # ── Build résumé ──────────────────────────────────────────────────────
+    # â”€â”€ Build rÃ©sumÃ© â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     resume_lines = []
     for e in unique_rules[:2]:
         rule  = e.get('rule', '')
@@ -3190,11 +3295,11 @@ def _synthesise_chat_answer(question: str, evidences: list, standard: str = '') 
         dec   = e.get('decision', '')
         badge = 'CONFORME' if dec == 'approved' else ('NON CONFORME' if dec == 'rejected' else '')
         if rule:
-            resume_lines.append(f"- {rule} [{score}%]{(' — ' + badge) if badge else ''}")
+            resume_lines.append(f"- {rule} [{score}%]{(' â€” ' + badge) if badge else ''}")
 
-    resume = '\n'.join(resume_lines) if resume_lines else f"Analyse basée sur {len(evidences)} preuve(s) de conformité."
+    resume = '\n'.join(resume_lines) if resume_lines else f"Analyse basÃ©e sur {len(evidences)} preuve(s) de conformitÃ©."
 
-    # ── Build analyse ─────────────────────────────────────────────────────
+    # â”€â”€ Build analyse â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     analyse_parts = []
     for e in unique_rules[:3]:
         rule     = e.get('rule', '')
@@ -3204,26 +3309,26 @@ def _synthesise_chat_answer(question: str, evidences: list, standard: str = '') 
         if not rule: continue
         verdict  = 'CONFORME' if decision == 'approved' else ('NON CONFORME' if decision == 'rejected' else 'EN ATTENTE')
         analyse_parts.append(
-            f"**Règle : {rule}** ({norm_label})\n"
-            f"Statut : {verdict} — Score similarité : {score}%\n"
+            f"**RÃ¨gle : {rule}** ({norm_label})\n"
+            f"Statut : {verdict} â€” Score similaritÃ© : {score}%\n"
             f"Preuve : {evidence if evidence else 'Aucune preuve textuelle disponible.'}"
         )
 
     analyse = '\n\n'.join(analyse_parts) if analyse_parts else "Analyse non disponible."
 
-    # ── Preuves utilisées ────────────────────────────────────────────────
+    # â”€â”€ Preuves utilisÃ©es â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     preuves_lines = []
     for i, e in enumerate(unique_rules[:4], 1):
         rule     = e.get('rule', '')
         evidence = (e.get('evidence') or '')[:120]
         score    = e.get('score', 0)
         decision = e.get('decision', '')
-        icon     = '✓' if decision == 'approved' else ('✗' if decision == 'rejected' else '—')
+        icon     = 'âœ“' if decision == 'approved' else ('âœ—' if decision == 'rejected' else 'â€”')
         preuves_lines.append(f"{i}. {icon} [{score}%] **{rule}** : {evidence}")
 
-    preuves = '\n'.join(preuves_lines) if preuves_lines else "Aucune preuve directe trouvée."
+    preuves = '\n'.join(preuves_lines) if preuves_lines else "Aucune preuve directe trouvÃ©e."
 
-    # ── Écarts identifiés ─────────────────────────────────────────────────
+    # â”€â”€ Ã‰carts identifiÃ©s â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     gaps = []
     for e in rejected[:3]:
         rule     = e.get('rule', '')
@@ -3231,39 +3336,39 @@ def _synthesise_chat_answer(question: str, evidences: list, standard: str = '') 
         if rule:
             gaps.append(f"- **{rule}** : {evidence}")
 
-    ecarts = '\n'.join(gaps) if gaps else "- Aucun écart identifié dans les preuves récupérées."
+    ecarts = '\n'.join(gaps) if gaps else "- Aucun Ã©cart identifiÃ© dans les preuves rÃ©cupÃ©rÃ©es."
 
-    # ── Recommandations ───────────────────────────────────────────────────
+    # â”€â”€ Recommandations â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     recs = []
     if rejected:
         for e in rejected[:2]:
             rule = e.get('rule', '')
             if rule:
-                recs.append(f"- Mettre en conformité la règle **{rule}** avec les exigences {norm_label}")
+                recs.append(f"- Mettre en conformitÃ© la rÃ¨gle **{rule}** avec les exigences {norm_label}")
     if confidence == 'Faible':
-        recs.append("- Enrichir la base de connaissances avec davantage de preuves validées")
-        recs.append("- Entraîner l'index FAISS via Evidence Intelligence > Train Memory")
+        recs.append("- Enrichir la base de connaissances avec davantage de preuves validÃ©es")
+        recs.append("- EntraÃ®ner l'index FAISS via Evidence Intelligence > Train Memory")
     if not recs:
-        recs.append(f"- Maintenir les contrôles conformes aux exigences {norm_label} en vigueur")
-        recs.append("- Planifier une revue périodique des preuves de conformité")
-        recs.append("- Documenter les prochaines validations avec des preuves textuelles détaillées")
+        recs.append(f"- Maintenir les contrÃ´les conformes aux exigences {norm_label} en vigueur")
+        recs.append("- Planifier une revue pÃ©riodique des preuves de conformitÃ©")
+        recs.append("- Documenter les prochaines validations avec des preuves textuelles dÃ©taillÃ©es")
 
     recommandations = '\n'.join(recs)
 
-    # ── Final structured response ─────────────────────────────────────────
+    # â”€â”€ Final structured response â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     return (
-        f"**Résumé :**\n{resume}\n\n"
+        f"**RÃ©sumÃ© :**\n{resume}\n\n"
         f"**Analyse :**\n{analyse}\n\n"
-        f"**Preuves utilisées :**\n{preuves}\n\n"
-        f"**Écarts identifiés :**\n{ecarts}\n\n"
+        f"**Preuves utilisÃ©es :**\n{preuves}\n\n"
+        f"**Ã‰carts identifiÃ©s :**\n{ecarts}\n\n"
         f"**Recommandations :**\n{recommandations}\n\n"
         f"**Niveau de confiance :** {confidence}"
     )
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# INNOVATION 7 — TeamLead Personalised Insights
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# INNOVATION 7 â€” TeamLead Personalised Insights
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsTeamLeadOrAdmin])
@@ -3333,14 +3438,14 @@ def teamlead_recommendations_api(request):
     # Derive smart recommendations from top failing rules
     RULE_RECOMMENDATIONS = {
         'version': 'Utiliser le template de signature avec champ version obligatoire.',
-        'signature': 'Rappeler aux employés l\'obligation de signature électronique.',
+        'signature': 'Rappeler aux employÃ©s l\'obligation de signature Ã©lectronique.',
         'approbation': 'Renforcer le guide d\'approbation documentaire.',
         'archivage': 'Configurer l\'archivage automatique dans le DMS.',
-        'identification': 'Appliquer le template d\'en-tête standardisé.',
+        'identification': 'Appliquer le template d\'en-tÃªte standardisÃ©.',
         'lisibilit': 'Fournir le guide de mise en forme documentaire ISO.',
-        'modification': 'Former les équipes au contrôle des modifications.',
-        'accessibilit': 'Vérifier les permissions d\'accès aux documents partagés.',
-        'validit': 'Mettre en place des revues périodiques trimestrielles.',
+        'modification': 'Former les Ã©quipes au contrÃ´le des modifications.',
+        'accessibilit': 'VÃ©rifier les permissions d\'accÃ¨s aux documents partagÃ©s.',
+        'validit': 'Mettre en place des revues pÃ©riodiques trimestrielles.',
     }
 
     recommendations = []
@@ -3352,7 +3457,7 @@ def teamlead_recommendations_api(request):
                 rec_text = rec
                 break
         if not rec_text:
-            rec_text = f"Revoir les critères de validation pour la règle \"{rule_data['rule']}\"."
+            rec_text = f"Revoir les critÃ¨res de validation pour la rÃ¨gle \"{rule_data['rule']}\"."
         recommendations.append({
             'rule': rule_data['rule'],
             'recommendation': rec_text,
@@ -3365,7 +3470,7 @@ def teamlead_recommendations_api(request):
     recent_activity = [
         {
             'id': d.id,
-            'norme': d.norme.name if d.norme else '—',
+            'norme': d.norme.name if d.norme else 'â€”',
             'employee': d.employee_username,
             'status': d.status,
             'created_at': d.created_at.isoformat(),
@@ -3387,16 +3492,16 @@ def teamlead_recommendations_api(request):
     })
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # DATASET QUALITY REPORT
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def ml_diagnostics_api(request):
     """
     Professional ML diagnostics for the dashboard.
-    SINGLE SOURCE OF TRUTH: RuleTrainingSample — same table used for model training.
+    SINGLE SOURCE OF TRUTH: RuleTrainingSample â€” same table used for model training.
     Returns dataset health indicators consistent with the Model Comparison Table.
     """
     from collections import Counter
@@ -3414,7 +3519,7 @@ def ml_diagnostics_api(request):
     elif standard:
         selected_norm = Norme.objects.filter(name__iexact=standard).first()
 
-    # ── PRIMARY SOURCE: RuleTrainingSample (same as model training) ──────
+    # â”€â”€ PRIMARY SOURCE: RuleTrainingSample (same as model training) â”€â”€â”€â”€â”€â”€
     evidence_qs = RuleTrainingSample.objects.all()
     if selected_norm:
         evidence_qs = evidence_qs.filter(norm=selected_norm)
@@ -3477,8 +3582,8 @@ def ml_diagnostics_api(request):
     except Exception:
         pass
 
-    # ── Secondary: TrainingSample (document-level, may be populated) ─────
-    # Used only for "document_labels" section — not for primary metrics
+    # â”€â”€ Secondary: TrainingSample (document-level, may be populated) â”€â”€â”€â”€â”€
+    # Used only for "document_labels" section â€” not for primary metrics
     ts_qs = TrainingSample.objects.filter(document__norme=selected_norm) if selected_norm else TrainingSample.objects.none()
     approved_docs = ts_qs.filter(label='approved').count()
     rejected_docs = ts_qs.filter(label='rejected').count()
@@ -3495,7 +3600,7 @@ def ml_diagnostics_api(request):
         warnings.append('Dataset is imbalanced. Consider adding more minority class samples.')
 
     return Response({
-        # Primary metrics — from RuleTrainingSample (same source as model training)
+        # Primary metrics â€” from RuleTrainingSample (same source as model training)
         'total_evidences':      total_evidences,
         'total_documents':      total_evidences,   # alias: shows training set size, not document count
         'document_samples':     total_evidences,
@@ -3602,7 +3707,7 @@ def dataset_quality_report_api(request):
     vocabulary_size = len(all_words)
     avg_evidence_length = round(total_words / max(len(non_empty), 1), 1)
 
-    # Rules coverage — FIXED: use resolved_norm for reliable rule counting
+    # Rules coverage â€” FIXED: use resolved_norm for reliable rule counting
     total_rules_in_norm = 0
     rules_with_evidence = 0
     if resolved_norm:
@@ -3700,10 +3805,10 @@ def dataset_quality_report_api(request):
     })
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# SYNC DATASET — POST /api/dataset/sync/
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# SYNC DATASET â€” POST /api/dataset/sync/
 # Triggers synchronisation de TrainingSample depuis RuleTrainingSample
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -3711,7 +3816,7 @@ def sync_dataset_api(request):
     """
     POST /api/dataset/sync/
     Synchronise les TrainingSample depuis les RuleTrainingSample existants.
-    Appelé après validation, création d'evidence ou import de dataset.
+    AppelÃ© aprÃ¨s validation, crÃ©ation d'evidence ou import de dataset.
     """
     norm_id = request.data.get('norm_id')
     document_ids = request.data.get('document_ids')
@@ -3750,18 +3855,18 @@ def sync_dataset_api(request):
         return Response({'success': False, 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# COHERENCE CHECK — GET /api/dataset/coherence/
-# Retourne un rapport de cohérence entre Evidence et Training Dataset
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# COHERENCE CHECK â€” GET /api/dataset/coherence/
+# Retourne un rapport de cohÃ©rence entre Evidence et Training Dataset
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def dataset_coherence_api(request):
     """
     GET /api/dataset/coherence/
-    Vérifie la cohérence entre RuleTrainingSample et les stats affichées.
-    Utilisé pour valider que toutes les pages affichent les mêmes chiffres.
+    VÃ©rifie la cohÃ©rence entre RuleTrainingSample et les stats affichÃ©es.
+    UtilisÃ© pour valider que toutes les pages affichent les mÃªmes chiffres.
     """
     norms_report = []
     for norm in Norme.objects.prefetch_related('rules').all():
@@ -3820,15 +3925,15 @@ def dataset_coherence_api(request):
     })
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# MLOPS — Training Job tracking, Jenkins trigger, Prometheus metrics
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# MLOPS â€” Training Job tracking, Jenkins trigger, Prometheus metrics
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 from .models import TrainingJob, MLOpsConfig
 
 
 class TrainingJobSerializer_inline:
-    """Inline serializer — avoids a separate serializers.py change."""
+    """Inline serializer â€” avoids a separate serializers.py change."""
     @staticmethod
     def serialize(job):
         # Format model_version: strip "jenkins-0-" prefix that appears when
@@ -3837,7 +3942,7 @@ class TrainingJobSerializer_inline:
         if raw_version.startswith('jenkins-0-'):
             display_version = raw_version[len('jenkins-0-'):]
         elif raw_version.startswith('jenkins-'):
-            # e.g. "jenkins-42-RandomForest" → keep as-is (real build)
+            # e.g. "jenkins-42-RandomForest" â†’ keep as-is (real build)
             display_version = raw_version
         else:
             display_version = raw_version
@@ -3874,7 +3979,7 @@ def mlops_jenkins_status_api(request):
     """
     GET /api/ml/jenkins/status/
     Returns a full Jenkins health check result.
-    Performs live network checks — do not call in tight loops.
+    Performs live network checks â€” do not call in tight loops.
     The frontend should call this endpoint on demand (e.g. "Test connection" button).
     """
     from services.mlops_service import get_jenkins_health
@@ -3908,7 +4013,7 @@ def mlops_status_api(request):
         except Exception:
             drift_info = {'drift_score': None, 'status': 'error'}
 
-        # Last successful TrainingJob for this standard — single source of truth
+        # Last successful TrainingJob for this standard â€” single source of truth
         # for metrics (f1, precision, recall, accuracy, model_version).
         last_job = (
             TrainingJob.objects
@@ -3918,7 +4023,7 @@ def mlops_status_api(request):
         )
         last_job_data = TrainingJobSerializer_inline.serialize(last_job) if last_job else None
 
-        # Total training samples (RuleTrainingSample) — this is what the ML
+        # Total training samples (RuleTrainingSample) â€” this is what the ML
         # pipeline actually trains on, not the raw Document upload count.
         total_samples = RuleTrainingSample.objects.filter(
             norm__name__iexact=cfg.standard
@@ -3928,7 +4033,7 @@ def mlops_status_api(request):
             label__in=['approved', 'rejected'],
         ).count()
 
-        # New labeled samples since last training — the meaningful "new docs" metric.
+        # New labeled samples since last training â€” the meaningful "new docs" metric.
         if cfg.last_trained_at:
             new_samples = RuleTrainingSample.objects.filter(
                 norm__name__iexact=cfg.standard,
@@ -3967,7 +4072,7 @@ def mlops_status_api(request):
             'retraining_threshold': threshold,
             'auto_trigger_enabled': cfg.auto_trigger_enabled,
             'training_count': cfg.training_count,
-            # Metrics from last successful job — single source of truth
+            # Metrics from last successful job â€” single source of truth
             'last_f1_score':    effective_f1 if effective_f1 else None,
             'last_drift_score': effective_drift if effective_drift else None,
             # Counts based on RuleTrainingSample (what the pipeline trains on).
@@ -3975,7 +4080,7 @@ def mlops_status_api(request):
             # always show the same number without frontend fallback chains.
             'total_samples':    labeled_samples,     # labeled RuleTrainingSample rows
             'labeled_samples':  labeled_samples,     # alias (used by StandardCard)
-            'total_documents':  labeled_samples,     # legacy alias — now identical to labeled_samples
+            'total_documents':  labeled_samples,     # legacy alias â€” now identical to labeled_samples
             'new_samples':      new_samples,
             'new_documents':    new_samples,         # legacy alias
             'needs_training':   needs_training,
@@ -3990,7 +4095,7 @@ def mlops_status_api(request):
                                 if last_job_data else None,
         })
 
-    # Recent jobs — strip any with standard='' or clearly garbage data
+    # Recent jobs â€” strip any with standard='' or clearly garbage data
     recent_jobs = (
         TrainingJob.objects
         .exclude(standard='')
@@ -4035,7 +4140,7 @@ def mlops_status_api(request):
             'running_jobs': running_jobs,
             'last_successful_job': TrainingJobSerializer_inline.serialize(last_success) if last_success else None,
         },
-        # Structured Jenkins health — single source of truth for the frontend
+        # Structured Jenkins health â€” single source of truth for the frontend
         'jenkins': jenkins_info,
         # Kept for backward compat with older frontend code
         'jenkins_configured': jenkins_health['connected'],
@@ -4233,7 +4338,7 @@ def mlops_drift_api(request):
 def mlops_prometheus_metrics_api(request):
     """
     GET /api/metrics/
-    Expose Prometheus-compatible metrics. Admin only — prevents data leakage.
+    Expose Prometheus-compatible metrics. Admin only â€” prevents data leakage.
     """
     from django.http import HttpResponse
     from services.mlops_service import get_prometheus_metrics
@@ -4245,9 +4350,9 @@ def mlops_prometheus_metrics_api(request):
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# COVERAGE DIAGNOSTICS — GET /api/evidence/coverage-diagnostics/
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# COVERAGE DIAGNOSTICS â€” GET /api/evidence/coverage-diagnostics/
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -4349,14 +4454,14 @@ def evidence_coverage_diagnostics_api(request):
     return Response({'norms': results, 'total_norms': len(results)})
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # LLM / OLLAMA ENDPOINTS
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def llm_status_api(request):
-    """GET /api/llm/status/ — Ollama availability and loaded models."""
+    """GET /api/llm/status/ â€” Ollama availability and loaded models."""
     from services.llm_service import get_ollama_status
     return Response(get_ollama_status())
 
@@ -4364,7 +4469,7 @@ def llm_status_api(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, IsAdmin])
 def llm_pull_model_api(request):
-    """POST /api/llm/pull/ — Pull/download a model in Ollama."""
+    """POST /api/llm/pull/ â€” Pull/download a model in Ollama."""
     from services.llm_service import pull_model, OLLAMA_MODEL
     model = request.data.get('model', OLLAMA_MODEL)
     result = pull_model(model)
@@ -4372,10 +4477,10 @@ def llm_pull_model_api(request):
     return Response(result, status=st)
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# AI INSIGHTS — Aggregated overview endpoint
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# AI INSIGHTS â€” Aggregated overview endpoint
 # GET /api/ai/overview/
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsTeamLeadOrAdmin])
@@ -4391,7 +4496,7 @@ def ai_overview_api(request):
     from services.llm_service import get_ollama_status
     from services.mlops_service import compute_drift_score
 
-    # ── Models from metrics JSON ──────────────────────────────────────────
+    # â”€â”€ Models from metrics JSON â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     models_dir = os.path.join(os.path.dirname(__file__), '..', 'ml', 'models')
     allowed_algos = ["RandomForest", "LogisticRegression", "GradientBoosting", "BiLSTM"]
     all_models_info = []
@@ -4452,7 +4557,7 @@ def ai_overview_api(request):
         except Exception:
             pass
 
-    # ── Evidence / dataset stats ──────────────────────────────────────────
+    # â”€â”€ Evidence / dataset stats â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     total_evidence = RuleTrainingSample.objects.count()
     approved_ev = RuleTrainingSample.objects.filter(label='approved').count()
     rejected_ev = RuleTrainingSample.objects.filter(label='rejected').count()
@@ -4467,7 +4572,7 @@ def ai_overview_api(request):
     duplicate_count = sum(v - 1 for v in dup_counter.values() if v > 1)
     dup_rate = round((1 - len(set(ev_texts)) / max(len(ev_texts), 1)) * 100, 1) if ev_texts else 0
 
-    # ── Training jobs stats ───────────────────────────────────────────────
+    # â”€â”€ Training jobs stats â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     total_jobs = TrainingJob.objects.count()
     success_jobs = TrainingJob.objects.filter(status='success').count()
     failed_jobs = TrainingJob.objects.filter(status='failed').count()
@@ -4478,7 +4583,7 @@ def ai_overview_api(request):
     avg_f1 = TrainingJob.objects.filter(status='success', f1_score__gt=0).aggregate(avg=Avg('f1_score'))['avg']
     avg_drift = TrainingJob.objects.filter(status='success').aggregate(avg=Avg('drift_score'))['avg']
 
-    # ── Drift per standard ────────────────────────────────────────────────
+    # â”€â”€ Drift per standard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # FIX #4: compute drift for ALL standards (not just 3) so ai/overview and
     # mlops/status show the same drift values. We cache the result per-request
     # using a dict; no external cache needed since the endpoint is already
@@ -4495,7 +4600,7 @@ def ai_overview_api(request):
     if drift_values:
         global_drift = round(sum(drift_values) / len(drift_values), 4)
 
-    # ── FAISS / Embedding index ───────────────────────────────────────────
+    # â”€â”€ FAISS / Embedding index â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     faiss_meta = None
     if load_evidence_index_metadata is not None:
         try:
@@ -4508,20 +4613,20 @@ def ai_overview_api(request):
     vector_dim = (faiss_meta.get('vector_dim') if faiss_meta else None)
     last_indexed = (faiss_meta.get('last_trained') if faiss_meta else None)
 
-    # ── LLM / Ollama ──────────────────────────────────────────────────────
+    # â”€â”€ LLM / Ollama â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     try:
         llm_status = get_ollama_status()
     except Exception:
         llm_status = {'available': False, 'reason': 'Error checking Ollama'}
 
-    # ── MLOps configs ────────────────────────────────────────────────────
+    # â”€â”€ MLOps configs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # FIX: include training_count and dataset_size (now reliably updated).
     configs = list(MLOpsConfig.objects.all().values(
         'standard', 'last_trained_at', 'current_model_version',
         'last_f1_score', 'last_drift_score', 'training_count', 'dataset_size',
     ))
 
-    # ── Timeline events (training + drift significant events) ─────────────
+    # â”€â”€ Timeline events (training + drift significant events) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     timeline_jobs = list(
         TrainingJob.objects.order_by('-created_at')[:15].values(
             'id', 'standard', 'status', 'start_time', 'end_time',
@@ -4530,7 +4635,7 @@ def ai_overview_api(request):
         )
     )
 
-    # ── Determine AI health score ─────────────────────────────────────────
+    # â”€â”€ Determine AI health score â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     health_score = 100
     health_issues = []
 
@@ -4564,22 +4669,22 @@ def ai_overview_api(request):
         else 'Critical'
     )
 
-    # ── Recommendations engine ────────────────────────────────────────────
+    # â”€â”€ Recommendations engine â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     recommendations = []
     if dup_rate > 5:
         recommendations.append({
             'type': 'dataset',
             'priority': 'high' if dup_rate > 15 else 'medium',
             'title': 'Supprimer les doublons',
-            'message': f'{duplicate_count} doublons détectés ({dup_rate}%). Nettoyer et réindexer FAISS.',
+            'message': f'{duplicate_count} doublons dÃ©tectÃ©s ({dup_rate}%). Nettoyer et rÃ©indexer FAISS.',
             'action': 'deduplicate',
         })
     if global_drift > 0.15:
         recommendations.append({
             'type': 'drift',
             'priority': 'high' if global_drift > 0.3 else 'medium',
-            'title': 'Drift détecté — Relancer l\'entraînement',
-            'message': f'Drift global: {round(global_drift * 100, 1)}%. Les données ont significativement évolué.',
+            'title': 'Drift dÃ©tectÃ© â€” Relancer l\'entraÃ®nement',
+            'message': f'Drift global: {round(global_drift * 100, 1)}%. Les donnÃ©es ont significativement Ã©voluÃ©.',
             'action': 'retrain',
         })
     if total_evidence > 0:
@@ -4588,8 +4693,8 @@ def ai_overview_api(request):
             recommendations.append({
                 'type': 'dataset',
                 'priority': 'medium',
-                'title': 'Dataset déséquilibré',
-                'message': f'Ratio approuvé/rejeté: {balance}. Ajouter plus d\'exemples de la classe minoritaire.',
+                'title': 'Dataset dÃ©sÃ©quilibrÃ©',
+                'message': f'Ratio approuvÃ©/rejetÃ©: {balance}. Ajouter plus d\'exemples de la classe minoritaire.',
                 'action': 'balance',
             })
     if not llm_status.get('available'):
@@ -4597,7 +4702,7 @@ def ai_overview_api(request):
             'type': 'llm',
             'priority': 'low',
             'title': 'Assistant IA hors ligne',
-            'message': 'Ollama n\'est pas disponible. Démarrer le service ou configurer OLLAMA_URL.',
+            'message': 'Ollama n\'est pas disponible. DÃ©marrer le service ou configurer OLLAMA_URL.',
             'action': 'start_llm',
         })
     if rules_covered < total_rules_all * 0.8 and total_rules_all > 0:
@@ -4605,7 +4710,7 @@ def ai_overview_api(request):
             'type': 'coverage',
             'priority': 'medium',
             'title': 'Couverture insuffisante',
-            'message': f'Seulement {rules_covered}/{total_rules_all} règles ont des preuves. Ajouter des validations.',
+            'message': f'Seulement {rules_covered}/{total_rules_all} rÃ¨gles ont des preuves. Ajouter des validations.',
             'action': 'add_evidence',
         })
     if faiss_meta is None:
@@ -4613,15 +4718,15 @@ def ai_overview_api(request):
             'type': 'faiss',
             'priority': 'medium',
             'title': 'Index FAISS non construit',
-            'message': 'Aucun index FAISS trouvé. Construire l\'index pour activer la recherche sémantique.',
+            'message': 'Aucun index FAISS trouvÃ©. Construire l\'index pour activer la recherche sÃ©mantique.',
             'action': 'build_index',
         })
     if last_success is None and total_evidence > 10:
         recommendations.append({
             'type': 'training',
             'priority': 'high',
-            'title': 'Aucun entraînement réussi',
-            'message': 'Des données sont disponibles mais aucun modèle n\'a été entraîné avec succès.',
+            'title': 'Aucun entraÃ®nement rÃ©ussi',
+            'message': 'Des donnÃ©es sont disponibles mais aucun modÃ¨le n\'a Ã©tÃ© entraÃ®nÃ© avec succÃ¨s.',
             'action': 'train',
         })
 
