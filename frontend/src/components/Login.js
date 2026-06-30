@@ -8,7 +8,7 @@ import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Eye, EyeOff, AlertCircle, ArrowRight, Mail, Lock,
-  Loader2, AlertTriangle, ShieldCheck,
+  Loader2, AlertTriangle,
 } from 'lucide-react';
 import { UserContext } from '../context/UserContext';
 import api from '../services/api';
@@ -201,15 +201,17 @@ const Login = () => {
             transition={{ delay: 0.12, duration: 0.5, ease: [0.22,1,0.36,1] }}
             className="flex flex-col items-center mb-8 text-center"
           >
-            {/* Platform icon */}
+            {/* Capgemini logo */}
             <div className="relative mb-4">
-              <motion.div className="absolute inset-0 rounded-2xl blur-lg opacity-60"
-                style={{ background: 'linear-gradient(135deg,#1d4ed8,#3b82f6)' }}
-                animate={{ opacity: [0.4, 0.7, 0.4] }}
-                transition={{ duration: 3, repeat: Infinity }}/>
-              <div className="relative flex h-14 w-14 items-center justify-center rounded-2xl shadow-xl"
-                   style={{ background: 'linear-gradient(135deg,#1e3a8a,#1d4ed8,#2563eb)' }}>
-                <ShieldCheck size={26} className="text-white"/>
+              <motion.div className="absolute inset-0 rounded-xl blur-xl opacity-30 pointer-events-none"
+                style={{ background: 'radial-gradient(circle, rgba(59,130,246,0.5), transparent)' }}
+                animate={{ opacity: [0.2, 0.45, 0.2] }}
+                transition={{ duration: 4, repeat: Infinity }}/>
+              <div className="relative rounded-xl px-5 py-3 border border-white/[0.08]"
+                   style={{ background: 'rgba(255,255,255,0.05)', backdropFilter: 'blur(8px)' }}>
+                <img src={capgeminiLogo} alt="Capgemini"
+                     className="h-10 w-auto object-contain"
+                     style={{ filter: 'brightness(0) invert(1)' }}/>
               </div>
             </div>
 
