@@ -115,7 +115,7 @@ pipeline {
         DB_PORT                 = "5432"
 
         // Django
-        DJANGO_SECRET_KEY       = "change-me-in-production-use-a-long-random-string"
+        DJANGO_SECRET_KEY       = "*icm=l80zwu7t$)^in(tu(u7p%yx7@*++3nqb(b6*v1!4j05f@"
         DEBUG                   = "True"
         ALLOWED_HOSTS           = "localhost,127.0.0.1"
         SESSION_COOKIE_SECURE   = "False"
@@ -123,15 +123,7 @@ pipeline {
         SECURE_SSL_REDIRECT     = "False"
         SECURE_HSTS_SECONDS     = "0"
 
-        // Keycloak
-        KEYCLOAK_SERVER_URL        = "http://localhost:8081"
-        KEYCLOAK_REALM             = "iso9001-realm"
-        KEYCLOAK_CLIENT_ID         = "iso9001-client"
-        KEYCLOAK_CLIENT_SECRET     = "change-me-keycloak-client-secret"
-        KEYCLOAK_ADMIN_USERNAME    = "admin"
-        KEYCLOAK_ADMIN_PASSWORD    = "change-me-admin-password"
-        KEYCLOAK_ADMIN_CLIENT_ID   = "admin-cli"
-        KEYCLOAK_ADMIN_CLIENT_SECRET = ""
+        
 
         // Jenkins MLOps
         JENKINS_URL_ENV         = "http://localhost:8089"
@@ -177,8 +169,9 @@ pipeline {
         stage('2 - Generate Env File') {
             steps {
                 script {
-                    def envContent = """DATABASE_URL=${env.DATABASE_URL}
+ def envContent = """DATABASE_URL=${env.DATABASE_URL}
 CONN_MAX_AGE=${env.CONN_MAX_AGE}
+
 DJANGO_SECRET_KEY=${env.DJANGO_SECRET_KEY}
 DEBUG=${env.DEBUG}
 ALLOWED_HOSTS=${env.ALLOWED_HOSTS}
@@ -186,20 +179,14 @@ SESSION_COOKIE_SECURE=${env.SESSION_COOKIE_SECURE}
 CSRF_COOKIE_SECURE=${env.CSRF_COOKIE_SECURE}
 SECURE_SSL_REDIRECT=${env.SECURE_SSL_REDIRECT}
 SECURE_HSTS_SECONDS=${env.SECURE_HSTS_SECONDS}
-KEYCLOAK_SERVER_URL=${env.KEYCLOAK_SERVER_URL}
-KEYCLOAK_REALM=${env.KEYCLOAK_REALM}
-KEYCLOAK_CLIENT_ID=${env.KEYCLOAK_CLIENT_ID}
-KEYCLOAK_CLIENT_SECRET=${env.KEYCLOAK_CLIENT_SECRET}
-KEYCLOAK_ADMIN_USERNAME=${env.KEYCLOAK_ADMIN_USERNAME}
-KEYCLOAK_ADMIN_PASSWORD=${env.KEYCLOAK_ADMIN_PASSWORD}
-KEYCLOAK_ADMIN_CLIENT_ID=${env.KEYCLOAK_ADMIN_CLIENT_ID}
-KEYCLOAK_ADMIN_CLIENT_SECRET=${env.KEYCLOAK_ADMIN_CLIENT_SECRET}
+
 JENKINS_URL=${env.JENKINS_URL_ENV}
 JENKINS_USER=${env.JENKINS_USER_ENV}
 JENKINS_TOKEN=${env.JENKINS_TOKEN_ENV}
 JENKINS_JOB_NAME=${env.JENKINS_JOB_NAME_ENV}
 MLOPS_RETRAINING_THRESHOLD=${env.MLOPS_RETRAINING_THRESHOLD}
 DJANGO_API_URL=${env.DJANGO_API_URL}
+
 DB_NAME=${env.DB_NAME}
 DB_USER=${env.DB_USER}
 DB_PASSWORD=${env.DB_PASSWORD}
