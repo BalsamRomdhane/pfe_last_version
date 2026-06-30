@@ -3,30 +3,27 @@
 // Pipeline MLOps + DevSecOps - Windows local, sans Docker
 // Jenkins 2.555+ - Declarative Pipeline - UTF-8 sans BOM
 //
-// ARCHITECTURE DES SECRETS :
+// ARCHITECTURE :
 //   Le fichier backend/.env est GENERE automatiquement au
-//   stage "2 - Generate Env File" depuis les Credentials
-//   Jenkins via withCredentials(). Il n est PAS lu depuis
-//   le disque et N EST PAS versionne dans Git.
+//   stage "2 - Generate Env File" a partir des variables
+//   definies dans le bloc environment{} ci-dessous.
+//   Il N EST PAS requis sur le disque de l agent.
+//   Il N EST PAS versionne dans Git (.gitignore).
 //   Il est SUPPRIME dans post { always } apres chaque build.
 //
-// CREDENTIALS JENKINS REQUIS (Manage Jenkins > Credentials) :
-//   django-secret-key        (Secret Text) -> DJANGO_SECRET_KEY
-//   database-url             (Secret Text) -> DATABASE_URL
-//   keycloak-client-secret   (Secret Text) -> KEYCLOAK_CLIENT_SECRET
-//   keycloak-admin-password  (Secret Text) -> KEYCLOAK_ADMIN_PASSWORD
-//   jenkins-api-token        (Secret Text) -> JENKINS_TOKEN
+//   Toutes les valeurs sont des parametres de developpement
+//   local. Pour un environnement de production, remplacer
+//   les valeurs sensibles par des Jenkins Credentials.
 //
 // OUTILS JENKINS REQUIS (Manage Jenkins > Tools) :
 //   SonarQube Scanner : SonarScanner
 //
 // PLUGINS REQUIS :
-//   pipeline, git, sonar, credentials-binding, timestamper,
-//   build-discarder
+//   pipeline, git, sonar, timestamper, build-discarder
 //
 // STAGES :
 //   1  - Checkout
-//   2  - Generate Env File    [NOUVEAU - remplace "Verify Env"]
+//   2  - Generate Env File
 //   3  - Python Environment
 //   4  - Install Backend Dependencies
 //   5  - Install Frontend Dependencies
@@ -92,36 +89,55 @@ pipeline {
 
     // ----------------------------------------------------------
     // Variables globales du pipeline.
-    // AUCUNE valeur sensible ne figure ici.
-    // Toutes les variables sensibles sont injectees dans le
-    // stage "2 - Generate Env File" via withCredentials().
+    // Toutes les variables necessaires pour generer backend/.env
+    // sont definies ici. Aucun credentials Jenkins requis.
+    // Le .env est genere au stage 2 et supprime dans post{always}.
     // ----------------------------------------------------------
     environment {
         BACKEND_DIR             = "${WORKSPACE}\\backend"
         FRONTEND_DIR            = "${WORKSPACE}\\frontend"
         ARTIFACTS_DIR           = "${WORKSPACE}\\artifacts"
-        // Chemin du .env genere - utilise aussi dans post{always}
         ENV_FILE                = "${WORKSPACE}\\backend\\.env"
         DJANGO_SETTINGS_MODULE  = "enterprise_platform.settings"
         PYTHONIOENCODING        = "utf-8"
         PYTHONUTF8              = "1"
         PYTHONDONTWRITEBYTECODE = "1"
         CI                      = "true"
-        // Variables non sensibles identiques pour tous les builds
+
+        // ── Variables qui seront ecrites dans backend/.env ──
+        // Base de donnees PostgreSQL locale
+        DATABASE_URL            = "postgres://postgres@localhost:5432/compliance_db"
+        CONN_MAX_AGE            = "600"
+        DB_NAME                 = "compliance_db"
+        DB_USER                 = "postgres"
+        DB_PASSWORD             = ""
         DB_HOST                 = "localhost"
         DB_PORT                 = "5432"
-        DB_NAME                 = "compliance_db"
-        CONN_MAX_AGE            = "600"
+
+        // Django
+        DJANGO_SECRET_KEY       = "change-me-in-production-use-a-long-random-string"
         DEBUG                   = "True"
         ALLOWED_HOSTS           = "localhost,127.0.0.1"
-        KEYCLOAK_SERVER_URL     = "http://localhost:8081"
-        KEYCLOAK_REALM          = "iso9001-realm"
-        KEYCLOAK_CLIENT_ID      = "iso9001-client"
-        KEYCLOAK_ADMIN_USERNAME = "admin"
-        KEYCLOAK_ADMIN_CLIENT_ID= "admin-cli"
-        JENKINS_URL_VAR         = "http://localhost:8089"
-        JENKINS_USER            = "jenkins_admin"
-        JENKINS_JOB_NAME        = "Enterprise-ISO-Compliance"
+        SESSION_COOKIE_SECURE   = "False"
+        CSRF_COOKIE_SECURE      = "False"
+        SECURE_SSL_REDIRECT     = "False"
+        SECURE_HSTS_SECONDS     = "0"
+
+        // Keycloak
+        KEYCLOAK_SERVER_URL        = "http://localhost:8081"
+        KEYCLOAK_REALM             = "iso9001-realm"
+        KEYCLOAK_CLIENT_ID         = "iso9001-client"
+        KEYCLOAK_CLIENT_SECRET     = "change-me-keycloak-client-secret"
+        KEYCLOAK_ADMIN_USERNAME    = "admin"
+        KEYCLOAK_ADMIN_PASSWORD    = "change-me-admin-password"
+        KEYCLOAK_ADMIN_CLIENT_ID   = "admin-cli"
+        KEYCLOAK_ADMIN_CLIENT_SECRET = ""
+
+        // Jenkins MLOps
+        JENKINS_URL_ENV         = "http://localhost:8089"
+        JENKINS_USER_ENV        = "jenkins_admin"
+        JENKINS_TOKEN_ENV       = "11f2c033cd14e1c2eec21c764c115c4ce1"
+        JENKINS_JOB_NAME_ENV    = "Enterprise-ISO-Compliance"
         MLOPS_RETRAINING_THRESHOLD = "10"
         DJANGO_API_URL          = "http://localhost:8000"
     }
@@ -153,78 +169,46 @@ pipeline {
         // ------------------------------------------------------
         // STAGE 2 - Generate Env File
         //
-        // CORRECTION PRINCIPALE :
-        //   Ce stage remplace l ancienne verification qui echouait
-        //   si backend/.env etait absent du disque de l agent.
-        //
-        //   Le fichier backend/.env est maintenant GENERE ICI
-        //   depuis les Jenkins Credentials via withCredentials().
-        //   Les secrets ne sont JAMAIS affiches dans les logs
-        //   Jenkins (masques automatiquement par le plugin).
-        //
-        //   Le fichier .env genere est supprime dans
-        //   post { always } en fin de pipeline.
-        //
-        // CREDENTIALS JENKINS REQUIS :
-        //   django-secret-key       -> DJANGO_SECRET_KEY
-        //   database-url            -> DATABASE_URL
-        //   keycloak-client-secret  -> KEYCLOAK_CLIENT_SECRET
-        //   keycloak-admin-password -> KEYCLOAK_ADMIN_PASSWORD
-        //   jenkins-api-token       -> JENKINS_TOKEN
+        // Genere automatiquement backend/.env depuis les
+        // variables definies dans le bloc environment{} ci-dessus.
+        // Aucun credentials Jenkins requis.
+        // Le fichier est supprime dans post { always }.
         // ------------------------------------------------------
         stage('2 - Generate Env File') {
             steps {
-                withCredentials([
-                    string(credentialsId: 'django-secret-key',
-                           variable: 'SECRET_KEY_VALUE'),
-                    string(credentialsId: 'database-url',
-                           variable: 'DATABASE_URL_VALUE'),
-                    string(credentialsId: 'keycloak-client-secret',
-                           variable: 'KC_CLIENT_SECRET'),
-                    string(credentialsId: 'keycloak-admin-password',
-                           variable: 'KC_ADMIN_PASSWORD'),
-                    string(credentialsId: 'jenkins-api-token',
-                           variable: 'JENKINS_TOKEN_VALUE')
-                ]) {
-                    script {
-                        // SECURITE : le contenu est construit dans une variable
-                        // Groovy, jamais ecrit via echo (qui afficherait dans les logs).
-                        // writeFile masque automatiquement les secrets car ils
-                        // viennent de withCredentials.
-                        def envContent = """DATABASE_URL=${DATABASE_URL_VALUE}
+                script {
+                    def envContent = """DATABASE_URL=${env.DATABASE_URL}
 CONN_MAX_AGE=${env.CONN_MAX_AGE}
-DJANGO_SECRET_KEY=${SECRET_KEY_VALUE}
+DJANGO_SECRET_KEY=${env.DJANGO_SECRET_KEY}
 DEBUG=${env.DEBUG}
 ALLOWED_HOSTS=${env.ALLOWED_HOSTS}
-SESSION_COOKIE_SECURE=False
-CSRF_COOKIE_SECURE=False
-SECURE_SSL_REDIRECT=False
-SECURE_HSTS_SECONDS=0
+SESSION_COOKIE_SECURE=${env.SESSION_COOKIE_SECURE}
+CSRF_COOKIE_SECURE=${env.CSRF_COOKIE_SECURE}
+SECURE_SSL_REDIRECT=${env.SECURE_SSL_REDIRECT}
+SECURE_HSTS_SECONDS=${env.SECURE_HSTS_SECONDS}
 KEYCLOAK_SERVER_URL=${env.KEYCLOAK_SERVER_URL}
 KEYCLOAK_REALM=${env.KEYCLOAK_REALM}
 KEYCLOAK_CLIENT_ID=${env.KEYCLOAK_CLIENT_ID}
-KEYCLOAK_CLIENT_SECRET=${KC_CLIENT_SECRET}
+KEYCLOAK_CLIENT_SECRET=${env.KEYCLOAK_CLIENT_SECRET}
 KEYCLOAK_ADMIN_USERNAME=${env.KEYCLOAK_ADMIN_USERNAME}
-KEYCLOAK_ADMIN_PASSWORD=${KC_ADMIN_PASSWORD}
+KEYCLOAK_ADMIN_PASSWORD=${env.KEYCLOAK_ADMIN_PASSWORD}
 KEYCLOAK_ADMIN_CLIENT_ID=${env.KEYCLOAK_ADMIN_CLIENT_ID}
-KEYCLOAK_ADMIN_CLIENT_SECRET=
-JENKINS_URL=${env.JENKINS_URL_VAR}
-JENKINS_USER=${env.JENKINS_USER}
-JENKINS_TOKEN=${JENKINS_TOKEN_VALUE}
-JENKINS_JOB_NAME=${env.JENKINS_JOB_NAME}
+KEYCLOAK_ADMIN_CLIENT_SECRET=${env.KEYCLOAK_ADMIN_CLIENT_SECRET}
+JENKINS_URL=${env.JENKINS_URL_ENV}
+JENKINS_USER=${env.JENKINS_USER_ENV}
+JENKINS_TOKEN=${env.JENKINS_TOKEN_ENV}
+JENKINS_JOB_NAME=${env.JENKINS_JOB_NAME_ENV}
 MLOPS_RETRAINING_THRESHOLD=${env.MLOPS_RETRAINING_THRESHOLD}
 DJANGO_API_URL=${env.DJANGO_API_URL}
 DB_NAME=${env.DB_NAME}
-DB_USER=postgres
-DB_PASSWORD=
+DB_USER=${env.DB_USER}
+DB_PASSWORD=${env.DB_PASSWORD}
 DB_HOST=${env.DB_HOST}
 DB_PORT=${env.DB_PORT}
 """
-                        // writeFile ecrit sans afficher le contenu dans les logs
-                        writeFile(file: "${env.ENV_FILE}", text: envContent, encoding: 'UTF-8')
-                        echo "[OK] backend/.env genere depuis les Jenkins Credentials."
-                        echo "[INFO] Fichier sera supprime dans post { always }."
-                    }
+                    writeFile(file: "${env.ENV_FILE}", text: envContent, encoding: 'UTF-8')
+                    echo "[OK] backend/.env genere avec succes."
+                    echo "[INFO] Le fichier sera supprime apres le build dans post { always }."
                 }
             }
         }
