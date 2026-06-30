@@ -85,13 +85,13 @@ const useAutoLogout = () => {
       }
     };
 
-    events.forEach(ev => globalThis.addEventListener(ev, handleActivity, { passive: true }));
-    globalThis.addEventListener('storage', handleStorageEvent);
+    events.forEach(ev => window.addEventListener(ev, handleActivity, { passive: true }));
+    window.addEventListener('storage', handleStorageEvent);
     resetTimers();
 
     return () => {
-      events.forEach(ev => globalThis.removeEventListener(ev, handleActivity));
-      globalThis.removeEventListener('storage', handleStorageEvent);
+      events.forEach(ev => window.removeEventListener(ev, handleActivity));
+      window.removeEventListener('storage', handleStorageEvent);
       clearTimeout(warningRef.current);
       clearTimeout(logoutRef.current);
       hideWarningToast();

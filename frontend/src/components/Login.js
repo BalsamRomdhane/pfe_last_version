@@ -19,9 +19,16 @@ function useCapsLock() {
   const [caps, setCaps] = useState(false);
   useEffect(() => {
     const h = e => setCaps(e.getModifierState?.('CapsLock') ?? false);
-    globalThis.addEventListener('keydown', h);
-    globalThis.addEventListener('keyup', h);
-    return () => { globalThis.removeEventListener('keydown', h); globalThis.removeEventListener('keyup', h); };
+    // eslint-disable-next-line no-restricted-globals
+    window.addEventListener('keydown', h);
+    // eslint-disable-next-line no-restricted-globals
+    window.addEventListener('keyup', h);
+    return () => {
+      // eslint-disable-next-line no-restricted-globals
+      window.removeEventListener('keydown', h);
+      // eslint-disable-next-line no-restricted-globals
+      window.removeEventListener('keyup', h);
+    };
   }, []);
   return caps;
 }
