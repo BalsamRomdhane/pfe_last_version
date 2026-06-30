@@ -58,73 +58,142 @@ function Field({ id, name, type, value, onChange, disabled, placeholder, autoCom
   );
 }
 
-/* ─── Abstract 3D shapes ────────────────────────────────────────── */
+/* ─── Premium background — 6 depth layers ──────────────────────── */
 function Bg() {
   return (
     <div className="absolute inset-0 overflow-hidden pointer-events-none" aria-hidden="true">
-      {/* Base mesh gradient */}
-      <div className="absolute inset-0"
-           style={{ background: 'radial-gradient(ellipse 80% 80% at 50% -20%, rgba(37,99,235,0.35) 0%, transparent 60%), radial-gradient(ellipse 60% 60% at 80% 80%, rgba(6,182,212,0.15) 0%, transparent 55%), radial-gradient(ellipse 50% 50% at 20% 90%, rgba(99,102,241,0.15) 0%, transparent 50%), #05081a' }}/>
 
-      {/* Large blurred sphere — top left */}
-      <motion.div
-        className="absolute -top-32 -left-32 w-[520px] h-[520px] rounded-full"
-        style={{ background: 'radial-gradient(circle, rgba(37,99,235,0.22) 0%, transparent 70%)', filter: 'blur(2px)' }}
-        animate={{ scale: [1, 1.08, 1], opacity: [0.7, 1, 0.7] }}
-        transition={{ duration: 10, repeat: Infinity, ease: 'easeInOut' }}/>
+      {/* ── Layer 1: Mesh gradient base ── */}
+      <div className="absolute inset-0" style={{
+        background: [
+          'radial-gradient(ellipse 90% 60% at 15% 10%, rgba(6,182,212,0.07) 0%, transparent 55%)',
+          'radial-gradient(ellipse 70% 70% at 85% 85%, rgba(37,99,235,0.18) 0%, transparent 60%)',
+          'radial-gradient(ellipse 60% 50% at 50% 50%, rgba(99,102,241,0.06) 0%, transparent 65%)',
+          'radial-gradient(ellipse 80% 40% at 0% 100%, rgba(37,99,235,0.12) 0%, transparent 55%)',
+          '#04061a',
+        ].join(', '),
+      }}/>
+      {/* Animated mesh shift */}
+      <motion.div className="absolute inset-0" style={{
+        background: 'radial-gradient(ellipse 50% 40% at 70% 20%, rgba(6,182,212,0.06) 0%, transparent 60%)',
+      }}
+        animate={{ opacity: [0.4, 0.9, 0.4], scale: [1, 1.06, 1] }}
+        transition={{ duration: 14, repeat: Infinity, ease: 'easeInOut' }}/>
 
-      {/* Medium sphere — bottom right */}
-      <motion.div
-        className="absolute -bottom-24 -right-24 w-[400px] h-[400px] rounded-full"
-        style={{ background: 'radial-gradient(circle, rgba(6,182,212,0.18) 0%, transparent 70%)', filter: 'blur(2px)' }}
-        animate={{ scale: [1, 1.1, 1], opacity: [0.5, 0.85, 0.5] }}
-        transition={{ duration: 12, repeat: Infinity, ease: 'easeInOut', delay: 2 }}/>
+      {/* ── Layer 2: Glow halos ── */}
+      {/* Cyan top-left */}
+      <motion.div className="absolute pointer-events-none"
+        style={{ top: '-10%', left: '-8%', width: '42vw', height: '42vw', borderRadius: '50%',
+          background: 'radial-gradient(circle, rgba(6,182,212,0.11) 0%, transparent 68%)', filter: 'blur(1px)' }}
+        animate={{ opacity: [0.5, 0.85, 0.5], scale: [1, 1.07, 1] }}
+        transition={{ duration: 11, repeat: Infinity, ease: 'easeInOut' }}/>
+      {/* Blue bottom-right */}
+      <motion.div className="absolute pointer-events-none"
+        style={{ bottom: '-12%', right: '-10%', width: '50vw', height: '50vw', borderRadius: '50%',
+          background: 'radial-gradient(circle, rgba(37,99,235,0.15) 0%, transparent 65%)', filter: 'blur(1px)' }}
+        animate={{ opacity: [0.4, 0.8, 0.4], scale: [1, 1.09, 1] }}
+        transition={{ duration: 13, repeat: Infinity, ease: 'easeInOut', delay: 2 }}/>
+      {/* Diffuse center glow behind card */}
+      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2"
+        style={{ width: '36vw', height: '36vw', borderRadius: '50%',
+          background: 'radial-gradient(circle, rgba(59,130,246,0.06) 0%, transparent 70%)', filter: 'blur(20px)' }}/>
+      {/* Violet top-right accent */}
+      <motion.div className="absolute pointer-events-none"
+        style={{ top: '5%', right: '5%', width: '22vw', height: '22vw', borderRadius: '50%',
+          background: 'radial-gradient(circle, rgba(139,92,246,0.07) 0%, transparent 65%)' }}
+        animate={{ opacity: [0.3, 0.65, 0.3] }}
+        transition={{ duration: 9, repeat: Infinity, ease: 'easeInOut', delay: 3 }}/>
 
-      {/* Floating ring — top right */}
-      <motion.div
-        className="absolute top-16 right-16 w-64 h-64 rounded-full border border-blue-500/15"
-        style={{ boxShadow: 'inset 0 0 40px rgba(37,99,235,0.08)' }}
-        animate={{ rotate: 360 }}
-        transition={{ duration: 40, repeat: Infinity, ease: 'linear' }}/>
-      <motion.div
-        className="absolute top-28 right-28 w-40 h-40 rounded-full border border-cyan-400/10"
-        animate={{ rotate: -360 }}
-        transition={{ duration: 28, repeat: Infinity, ease: 'linear' }}/>
+      {/* ── Layer 3: Orbital rings ── */}
+      {/* Ring A — large, off-center bottom-right, slow CW */}
+      <motion.div className="absolute pointer-events-none" style={{
+        bottom: '-18%', right: '-12%',
+        width: '68vw', height: '68vw', borderRadius: '50%',
+        border: '1px solid rgba(59,130,246,0.1)',
+        boxShadow: '0 0 24px rgba(59,130,246,0.06)',
+      }} animate={{ rotate: 360 }} transition={{ duration: 55, repeat: Infinity, ease: 'linear' }}/>
+      {/* Ring B — medium, partial top-left, CCW */}
+      <motion.div className="absolute pointer-events-none" style={{
+        top: '-22%', left: '-14%',
+        width: '56vw', height: '56vw', borderRadius: '50%',
+        border: '1px solid rgba(6,182,212,0.09)',
+        boxShadow: '0 0 18px rgba(6,182,212,0.04)',
+      }} animate={{ rotate: -360 }} transition={{ duration: 70, repeat: Infinity, ease: 'linear' }}/>
+      {/* Ring C — inner, near card, very faint */}
+      <motion.div className="absolute pointer-events-none" style={{
+        top: '30%', left: '22%',
+        width: '32vw', height: '32vw', borderRadius: '50%',
+        border: '0.5px solid rgba(148,163,184,0.07)',
+      }} animate={{ rotate: 360 }} transition={{ duration: 90, repeat: Infinity, ease: 'linear', delay: 5 }}/>
+      {/* Ring D — off-screen bottom-left */}
+      <motion.div className="absolute pointer-events-none" style={{
+        bottom: '-25%', left: '-18%',
+        width: '44vw', height: '44vw', borderRadius: '50%',
+        border: '0.5px solid rgba(99,102,241,0.08)',
+      }} animate={{ rotate: -360 }} transition={{ duration: 80, repeat: Infinity, ease: 'linear', delay: 10 }}/>
+      {/* Ring E — thin, top-center, partial */}
+      <motion.div className="absolute pointer-events-none" style={{
+        top: '-35%', left: '30%',
+        width: '38vw', height: '38vw', borderRadius: '50%',
+        border: '0.5px solid rgba(37,99,235,0.08)',
+      }} animate={{ rotate: 360 }} transition={{ duration: 100, repeat: Infinity, ease: 'linear', delay: 7 }}/>
 
-      {/* Floating ring — bottom left */}
-      <motion.div
-        className="absolute bottom-20 left-20 w-48 h-48 rounded-full border border-indigo-500/12"
-        animate={{ rotate: 360 }}
-        transition={{ duration: 35, repeat: Infinity, ease: 'linear', delay: 4 }}/>
+      {/* ── Layer 4: Particles ── */}
+      {[...Array(22)].map((_, i) => {
+        const size   = i % 5 === 0 ? 2 : 1;
+        const colors = ['rgba(147,197,253,0.5)', 'rgba(6,182,212,0.4)', 'rgba(167,139,250,0.35)', 'rgba(148,163,184,0.3)'];
+        const color  = colors[i % colors.length];
+        const dur    = 4 + (i % 5) * 1.5;
+        const twinkle = i % 3 === 0;
+        return (
+          <motion.div key={i}
+            className="absolute rounded-full pointer-events-none"
+            style={{ width: size, height: size, background: color, left: `${4+(i*4.3)%92}%`, top: `${3+(i*7.9)%94}%` }}
+            animate={twinkle
+              ? { opacity: [0, 1, 0.3, 1, 0], y: [0, -6, 0] }
+              : { opacity: [0, 0.7, 0], y: [0, -4, 0] }
+            }
+            transition={{ duration: dur, repeat: Infinity, delay: i * 0.3, ease: 'easeInOut' }}/>
+        );
+      })}
 
-      {/* 3D abstract blob — center top */}
-      <motion.div
-        className="absolute -top-16 left-1/2 -translate-x-1/2 w-[600px] h-48"
-        style={{ background: 'linear-gradient(180deg, rgba(59,130,246,0.08) 0%, transparent 100%)', filter: 'blur(40px)' }}
-        animate={{ scaleX: [1, 1.05, 1], opacity: [0.6, 1, 0.6] }}
-        transition={{ duration: 8, repeat: Infinity, ease: 'easeInOut' }}/>
-
-      {/* Subtle grid */}
-      <svg className="absolute inset-0 w-full h-full opacity-[0.03]" xmlns="http://www.w3.org/2000/svg">
+      {/* ── Layer 5: Curved abstract lines ── */}
+      <svg className="absolute inset-0 w-full h-full pointer-events-none" xmlns="http://www.w3.org/2000/svg"
+           style={{ opacity: 0.055 }}>
         <defs>
-          <pattern id="g" width="52" height="52" patternUnits="userSpaceOnUse">
-            <path d="M52 0L0 0 0 52" fill="none" stroke="white" strokeWidth="0.5"/>
-          </pattern>
+          <linearGradient id="lg1" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="transparent"/>
+            <stop offset="40%" stopColor="#3b82f6"/>
+            <stop offset="60%" stopColor="#06b6d4"/>
+            <stop offset="100%" stopColor="transparent"/>
+          </linearGradient>
+          <linearGradient id="lg2" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="transparent"/>
+            <stop offset="50%" stopColor="#6366f1"/>
+            <stop offset="100%" stopColor="transparent"/>
+          </linearGradient>
         </defs>
-        <rect width="100%" height="100%" fill="url(#g)"/>
+        {/* Orbit arc — bottom sweep */}
+        <path d="M -80 620 Q 300 400 760 580 T 1500 520" fill="none" stroke="url(#lg1)" strokeWidth="0.8"/>
+        {/* Secondary arc */}
+        <path d="M -50 720 Q 400 520 900 680 T 1600 640" fill="none" stroke="url(#lg1)" strokeWidth="0.4"/>
+        {/* Top diagonal */}
+        <path d="M 100 -20 Q 500 180 900 80 T 1500 200" fill="none" stroke="url(#lg2)" strokeWidth="0.6"/>
+        {/* Circuit-like right side */}
+        <path d="M 1200 100 Q 1350 300 1280 500 T 1400 750" fill="none" stroke="url(#lg1)" strokeWidth="0.5"/>
       </svg>
 
-      {/* Fine particles */}
-      {[...Array(16)].map((_, i) => (
-        <motion.div key={i} className="absolute rounded-full bg-blue-200/30"
-          style={{ width: i % 3 === 0 ? 2 : 1, height: i % 3 === 0 ? 2 : 1, left: `${5 + (i * 6.1) % 90}%`, top: `${4 + (i * 8.7) % 92}%` }}
-          animate={{ opacity: [0, 0.8, 0], y: [0, -8, 0] }}
-          transition={{ duration: 3 + (i % 4), repeat: Infinity, delay: i * 0.4 }}/>
-      ))}
+      {/* ── Grid texture ── */}
+      <svg className="absolute inset-0 w-full h-full pointer-events-none" xmlns="http://www.w3.org/2000/svg"
+           style={{ opacity: 0.022 }}>
+        <defs>
+          <pattern id="grd" width="48" height="48" patternUnits="userSpaceOnUse">
+            <path d="M48 0L0 0 0 48" fill="none" stroke="white" strokeWidth="0.5"/>
+          </pattern>
+        </defs>
+        <rect width="100%" height="100%" fill="url(#grd)"/>
+      </svg>
 
-      {/* Diagonal light streak */}
-      <div className="absolute inset-0"
-           style={{ background: 'linear-gradient(135deg, transparent 30%, rgba(59,130,246,0.04) 50%, transparent 70%)' }}/>
     </div>
   );
 }
