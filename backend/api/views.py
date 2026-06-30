@@ -18,6 +18,13 @@ from rest_framework.views import APIView
 # Cache TTL for dashboard aggregate endpoints (seconds)
 _DASHBOARD_CACHE_TTL = 120   # 2 minutes
 
+# Constant for ML unavailability message — avoids duplicating this
+# literal string across three separate training endpoints.
+_ML_UNAVAILABLE_MSG = (
+    {'error': _ML_UNAVAILABLE_MSG},
+    'and restart the server.'
+)
+
 
 def _table_exists(table_name: str) -> bool:
     try:
@@ -681,7 +688,7 @@ def train_model_api(request):
     error = _load_ml_training_modules()
     if error is not None or train_model is None:
         return Response(
-            {'error': 'ML training unavailable â€” install Visual C++ Redistributable 2019 and restart the server.'},
+            {'error': _ML_UNAVAILABLE_MSG},
             status=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
     standard = request.data.get('standard')
@@ -705,7 +712,7 @@ def train_models_api(request):
     error = _load_ml_training_modules()
     if error is not None or train_all_models is None:
         return Response(
-            {'error': 'ML training unavailable â€” install Visual C++ Redistributable 2019 and restart the server.'},
+            {'error': _ML_UNAVAILABLE_MSG},
             status=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
     standard = request.data.get('standard')
@@ -1306,7 +1313,7 @@ def ml_train_api(request):
     error = _load_ml_training_modules()
     if error is not None or train_all_models is None:
         return Response(
-            {'error': 'ML training unavailable â€” install Visual C++ Redistributable 2019 and restart the server.'},
+            {'error': _ML_UNAVAILABLE_MSG},
             status=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
     standard = request.data.get('standard')

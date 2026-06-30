@@ -103,7 +103,7 @@ def _save_model_with_backup(model, model_path: str) -> str:
     return model_path
 
 
-
+def _normalize_dataset_source(source):
     value = str(source or 'auto').strip().lower()
     if value in ('document', 'doc', 'classification', 'training'):
         return 'document'

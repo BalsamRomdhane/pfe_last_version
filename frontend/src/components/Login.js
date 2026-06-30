@@ -4,6 +4,7 @@
  * Auth logic unchanged.
  */
 import React, { useCallback, useContext, useEffect, useState } from 'react';
+import PropTypes from 'prop-types';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -18,9 +19,9 @@ function useCapsLock() {
   const [caps, setCaps] = useState(false);
   useEffect(() => {
     const h = e => setCaps(e.getModifierState?.('CapsLock') ?? false);
-    window.addEventListener('keydown', h);
-    window.addEventListener('keyup', h);
-    return () => { window.removeEventListener('keydown', h); window.removeEventListener('keyup', h); };
+    globalThis.addEventListener('keydown', h);
+    globalThis.addEventListener('keyup', h);
+    return () => { globalThis.removeEventListener('keydown', h); globalThis.removeEventListener('keyup', h); };
   }, []);
   return caps;
 }
@@ -57,6 +58,31 @@ function Field({ id, name, type, value, onChange, disabled, placeholder, autoCom
     </div>
   );
 }
+
+Field.propTypes = {
+  id:           PropTypes.string.isRequired,
+  name:         PropTypes.string.isRequired,
+  label:        PropTypes.string.isRequired,
+  type:         PropTypes.string.isRequired,
+  value:        PropTypes.string.isRequired,
+  onChange:     PropTypes.func.isRequired,
+  Icon:         PropTypes.elementType.isRequired,
+  disabled:     PropTypes.bool,
+  placeholder:  PropTypes.string,
+  autoComplete: PropTypes.string,
+  autoFocus:    PropTypes.bool,
+  right:        PropTypes.node,
+  capsWarn:     PropTypes.bool,
+};
+
+Field.defaultProps = {
+  disabled:     false,
+  placeholder:  '',
+  autoComplete: 'off',
+  autoFocus:    false,
+  right:        null,
+  capsWarn:     false,
+};
 
 /* ─── Premium background — 6 depth layers ──────────────────────── */
 function Bg() {
@@ -139,14 +165,16 @@ function Bg() {
       }} animate={{ rotate: 360 }} transition={{ duration: 100, repeat: Infinity, ease: 'linear', delay: 7 }}/>
 
       {/* ── Layer 4: Particles ── */}
-      {[...Array(22)].map((_, i) => {
+      {new Array(22).fill(null).map((_, i) => {
         const size   = i % 5 === 0 ? 2 : 1;
         const colors = ['rgba(147,197,253,0.5)', 'rgba(6,182,212,0.4)', 'rgba(167,139,250,0.35)', 'rgba(148,163,184,0.3)'];
         const color  = colors[i % colors.length];
         const dur    = 4 + (i % 5) * 1.5;
         const twinkle = i % 3 === 0;
+        // Stable key derived from deterministic position values (not array index)
+        const particleKey = `p-${i}-${size}-${Math.round(dur * 10)}`;
         return (
-          <motion.div key={i}
+          <motion.div key={particleKey}
             className="absolute rounded-full pointer-events-none"
             style={{ width: size, height: size, background: color, left: `${4+(i*4.3)%92}%`, top: `${3+(i*7.9)%94}%` }}
             animate={twinkle
@@ -202,10 +230,10 @@ function Bg() {
 const Login = () => {
   const navigate = useNavigate();
   const { login } = useContext(UserContext);
-  const [form, setForm]     = useState({ login: '', password: '' });
-  const [loading, setLoad]  = useState(false);
-  const [error, setError]   = useState('');
-  const [showPw, setShowPw] = useState(false);
+  const [form, setForm]       = useState({ login: '', password: '' });
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState('');
+  const [showPw, setShowPw]   = useState(false);
   const caps = useCapsLock();
 
   const onChange = useCallback((e) => {
@@ -217,7 +245,7 @@ const Login = () => {
   const onSubmit = async (e) => {
     e.preventDefault();
     if (!form.login || !form.password) { setError('Please enter your credentials.'); return; }
-    setLoad(true); setError('');
+    setLoading(true); setError('');
     try {
       const res = await api.post('/auth/login/', { login: form.login, password: form.password });
       login(res.data.access_token, res.data.user);
@@ -230,7 +258,7 @@ const Login = () => {
         'Invalid credentials. Please try again.'
       );
       setForm(p => ({ ...p, password: '' }));
-    } finally { setLoad(false); }
+    } finally { setLoading(false); }
   };
 
   const ver = process.env.REACT_APP_VERSION || '1.0.0';
