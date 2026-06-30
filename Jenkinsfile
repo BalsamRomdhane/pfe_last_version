@@ -1,7 +1,13 @@
 // ============================================================
 // Jenkinsfile - Enterprise ISO Compliance Platform
-// Pipeline MLOps + DevSecOps - Windows, sans Docker
+// Pipeline MLOps + DevSecOps - Windows local, sans Docker
 // Jenkins 2.555+ - Declarative Pipeline - UTF-8 sans BOM
+//
+// CONFIGURATION :
+//   Les variables d environnement Django sont lues depuis
+//   backend/.env par Django lui-meme via python-dotenv.
+//   Aucun credentials Jenkins n est requis.
+//   La seule condition est que backend/.env existe sur l agent.
 //
 // STAGES :
 //   1  - Checkout
@@ -9,32 +15,25 @@
 //   3  - Python Environment
 //   4  - Install Backend Dependencies
 //   5  - Install Frontend Dependencies
-//   6  - Django Check
-//   7  - Database Migration
-//   8  - Django Tests
-//   9  - Frontend Build
-//   10 - Dataset Validation
-//   11 - Security Module Check
-//   12 - Drift Detection
-//   13 - SonarQube Analysis
-//   14 - Quality Gate
-//   15 - ML Training
-//   16 - Export Metrics
-//   17 - TrainingJob Update
-//   18 - Archive Artifacts
-//   19 - Cleanup
-//
-// CREDENTIALS JENKINS REQUIS (Manage Jenkins > Credentials) :
-//   postgres-credentials   (Username/Password) DB_USER / DB_PASSWORD
-//   django-secret-key      (Secret Text)       DJANGO_SECRET_KEY
-//   sonarqube-token        (Secret Text)       injecte par withSonarQubeEnv
+//   6  - Django Check & Migrate
+//   7  - Django Tests
+//   8  - Frontend Build
+//   9  - Dataset Validation
+//   10 - Security Module Check
+//   11 - Drift Detection
+//   12 - SonarQube Analysis
+//   13 - Quality Gate
+//   14 - ML Training
+//   15 - Export Metrics
+//   16 - TrainingJob Update
+//   17 - Archive Artifacts
+//   18 - Cleanup
 //
 // OUTILS JENKINS REQUIS (Manage Jenkins > Tools) :
 //   SonarQube Scanner : SonarScanner
 //
 // PLUGINS JENKINS REQUIS :
-//   pipeline, git, sonar, credentials-binding, timestamper,
-//   build-discarder, ws-cleanup, junit
+//   pipeline, git, sonar, timestamper, build-discarder
 // ============================================================
 
 pipeline {
@@ -83,9 +82,10 @@ pipeline {
     }
 
     // ----------------------------------------------------------
-    // Variables d environnement - aucune valeur sensible ici.
-    // Les secrets sont injectes via withCredentials() dans
-    // chaque stage qui en a besoin.
+    // Variables globales du pipeline.
+    // Les variables sensibles (DB, Django) sont lues par Django
+    // depuis backend/.env via python-dotenv.
+    // Aucune valeur sensible ne figure ici.
     // ----------------------------------------------------------
     environment {
         BACKEND_DIR             = "${WORKSPACE}\\backend"
@@ -96,12 +96,6 @@ pipeline {
         PYTHONUTF8              = "1"
         PYTHONDONTWRITEBYTECODE = "1"
         CI                      = "true"
-        DB_HOST                 = "localhost"
-        DB_PORT                 = "5432"
-        DB_NAME                 = "compliance_db"
-        KEYCLOAK_SERVER_URL     = "http://localhost:8081"
-        KEYCLOAK_REALM          = "iso9001-realm"
-        KEYCLOAK_CLIENT_ID      = "iso9001-client"
     }
 
     // ==========================================================
@@ -109,12 +103,14 @@ pipeline {
 
         // ------------------------------------------------------
         // STAGE 1 - Checkout
+        // Recupere le code source et affiche les informations
+        // de tracabilite.
         // ------------------------------------------------------
         stage('1 - Checkout') {
             steps {
                 echo "========================================================="
                 echo " Build #${env.BUILD_NUMBER} | Branch: ${env.GIT_BRANCH ?: 'N/A'}"
-                echo " Standard: ${params.STANDARD}"
+                echo " Standard : ${params.STANDARD}"
                 echo "========================================================="
                 checkout scm
                 bat 'chcp 65001 > nul && git log --oneline -5'
@@ -125,42 +121,28 @@ pipeline {
 
         // ------------------------------------------------------
         // STAGE 2 - Verify Environment
-        // Verifie que Python, Node.js et les secrets sont
-        // disponibles. Echec immediat si manquant.
+        // Verifie que Python et le fichier .env sont presents.
+        // Echoue immediatement si .env est absent.
         // ------------------------------------------------------
         stage('2 - Verify Environment') {
             steps {
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'postgres-credentials',
-                        usernameVariable: 'DB_USER',
-                        passwordVariable: 'DB_PASSWORD'
-                    ),
-                    string(
-                        credentialsId: 'django-secret-key',
-                        variable: 'DJANGO_SECRET_KEY'
-                    )
-                ]) {
-                    bat 'chcp 65001 > nul && python --version'
-                    bat 'chcp 65001 > nul && node --version'
-                    bat 'chcp 65001 > nul && npm --version'
-                    script {
-                        if (!env.DB_NAME) {
-                            error('[FAIL] DB_NAME non configure.')
-                        }
-                        echo "[OK] DB_NAME  : ${env.DB_NAME}"
-                        echo "[OK] DB_HOST  : ${env.DB_HOST}"
-                        echo "[OK] DB_USER  : (masked)"
-                        echo "[OK] SECRET_KEY: (masked)"
-                        echo "[OK] Environment verification passed."
+                bat 'chcp 65001 > nul && python --version'
+                bat 'chcp 65001 > nul && node --version'
+                bat 'chcp 65001 > nul && npm --version'
+                script {
+                    def envFile = "${env.BACKEND_DIR}\\.env"
+                    if (!fileExists(envFile)) {
+                        error("[FAIL] backend/.env introuvable sur l agent Jenkins. Le fichier est requis.")
                     }
+                    echo "[OK] backend/.env detecte."
+                    echo "[OK] Environment verification passed."
                 }
             }
         }
 
         // ------------------------------------------------------
         // STAGE 3 - Python Environment
-        // Cree ou reutilise le virtualenv .venv dans backend/.
+        // Cree ou reutilise le virtualenv .venv.
         // ------------------------------------------------------
         stage('3 - Python Environment') {
             steps {
@@ -183,6 +165,7 @@ pipeline {
 
         // ------------------------------------------------------
         // STAGE 4 - Install Backend Dependencies
+        // Installe les dependances pip et verifie les imports.
         // ------------------------------------------------------
         stage('4 - Install Backend Dependencies') {
             steps {
@@ -216,90 +199,46 @@ pipeline {
         }
 
         // ------------------------------------------------------
-        // STAGE 6 - Django Check
-        // Verifie la configuration Django et les modeles ML.
+        // STAGE 6 - Django Check & Migrate
+        // Django lit backend/.env via python-dotenv.
+        // Aucun credentials Jenkins requis.
         // ------------------------------------------------------
-        stage('6 - Django Check') {
+        stage('6 - Django Check & Migrate') {
             steps {
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'postgres-credentials',
-                        usernameVariable: 'DB_USER',
-                        passwordVariable: 'DB_PASSWORD'
-                    ),
-                    string(
-                        credentialsId: 'django-secret-key',
-                        variable: 'DJANGO_SECRET_KEY'
-                    )
-                ]) {
-                    dir("${env.BACKEND_DIR}") {
-                        bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe manage.py check 2>&1 || echo [WARN] Django check non-zero exit.'
-                        bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe ci\\check_django.py'
-                    }
+                dir("${env.BACKEND_DIR}") {
+                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe manage.py check'
+                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe manage.py migrate --no-input'
+                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe ci\\check_django.py'
                 }
-                echo "[OK] Django check passed."
+                echo "[OK] Django check and migration complete."
             }
         }
 
         // ------------------------------------------------------
-        // STAGE 7 - Database Migration
-        // ------------------------------------------------------
-        stage('7 - Database Migration') {
-            steps {
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'postgres-credentials',
-                        usernameVariable: 'DB_USER',
-                        passwordVariable: 'DB_PASSWORD'
-                    ),
-                    string(
-                        credentialsId: 'django-secret-key',
-                        variable: 'DJANGO_SECRET_KEY'
-                    )
-                ]) {
-                    dir("${env.BACKEND_DIR}") {
-                        bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe manage.py migrate --no-input'
-                    }
-                }
-                echo "[OK] Database migration complete."
-            }
-        }
-
-        // ------------------------------------------------------
-        // STAGE 8 - Django Tests
-        // --keepdb reutilise la base de test pour accelerer.
+        // STAGE 7 - Django Tests
+        // --keepdb reutilise la base de test entre les builds.
         // Un echec partiel n interrompt pas le pipeline.
         // ------------------------------------------------------
-        stage('8 - Django Tests') {
+        stage('7 - Django Tests') {
             steps {
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'postgres-credentials',
-                        usernameVariable: 'DB_USER',
-                        passwordVariable: 'DB_PASSWORD'
-                    ),
-                    string(
-                        credentialsId: 'django-secret-key',
-                        variable: 'DJANGO_SECRET_KEY'
-                    )
-                ]) {
-                    dir("${env.BACKEND_DIR}") {
-                        bat '''
-                            chcp 65001 > nul
-                            .venv\\Scripts\\python.exe manage.py test api authentication notifications compliance --verbosity=1 --keepdb 2>&1
-                            IF %ERRORLEVEL% NEQ 0 echo [WARN] Some Django tests failed - pipeline continues.
-                        '''
-                    }
+                dir("${env.BACKEND_DIR}") {
+                    bat '''
+                        chcp 65001 > nul
+                        .venv\\Scripts\\python.exe manage.py test api authentication notifications compliance --verbosity=1 --keepdb 2>&1
+                        IF %ERRORLEVEL% NEQ 0 (
+                            echo [WARN] Some Django tests failed - pipeline continues.
+                        )
+                    '''
                 }
                 echo "[OK] Django tests executed."
             }
         }
 
         // ------------------------------------------------------
-        // STAGE 9 - Frontend Build
+        // STAGE 8 - Frontend Build
         // Ignore si SKIP_FRONTEND=true.
         // ------------------------------------------------------
-        stage('9 - Frontend Build') {
+        stage('8 - Frontend Build') {
             when {
                 expression { return !params.SKIP_FRONTEND }
             }
@@ -312,84 +251,48 @@ pipeline {
         }
 
         // ------------------------------------------------------
-        // STAGE 10 - Dataset Validation
+        // STAGE 9 - Dataset Validation
         // Synchronise les datasets et verifie le volume minimum.
         // ------------------------------------------------------
-        stage('10 - Dataset Validation') {
+        stage('9 - Dataset Validation') {
             steps {
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'postgres-credentials',
-                        usernameVariable: 'DB_USER',
-                        passwordVariable: 'DB_PASSWORD'
-                    ),
-                    string(
-                        credentialsId: 'django-secret-key',
-                        variable: 'DJANGO_SECRET_KEY'
-                    )
-                ]) {
-                    bat 'IF NOT EXIST "%ARTIFACTS_DIR%" mkdir "%ARTIFACTS_DIR%"'
-                    dir("${env.BACKEND_DIR}") {
-                        bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe manage.py system_audit 2>&1 || echo [WARN] system_audit non-zero exit.'
-                        bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe manage.py sync_all_datasets'
-                        script {
-                            def forceFlag = params.FORCE_REGEN ? '--force-regen' : ''
-                            bat "chcp 65001 > nul && .venv\\\\Scripts\\\\python.exe manage.py fill_ml_datasets --seed 42 ${forceFlag}"
-                        }
-                        bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe ci\\check_dataset.py'
+                bat 'IF NOT EXIST "%ARTIFACTS_DIR%" mkdir "%ARTIFACTS_DIR%"'
+                dir("${env.BACKEND_DIR}") {
+                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe manage.py system_audit 2>&1 || echo [WARN] system_audit non-zero exit, continuing.'
+                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe manage.py sync_all_datasets'
+                    script {
+                        def forceFlag = params.FORCE_REGEN ? '--force-regen' : ''
+                        bat "chcp 65001 > nul && .venv\\\\Scripts\\\\python.exe manage.py fill_ml_datasets --seed 42 ${forceFlag}"
                     }
+                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe ci\\check_dataset.py'
                 }
                 echo "[OK] Dataset validation complete."
             }
         }
 
         // ------------------------------------------------------
-        // STAGE 11 - Security Module Check
+        // STAGE 10 - Security Module Check
         // Verifie modeles, detecteurs, acces DB et routing URL.
         // ------------------------------------------------------
-        stage('11 - Security Module Check') {
+        stage('10 - Security Module Check') {
             steps {
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'postgres-credentials',
-                        usernameVariable: 'DB_USER',
-                        passwordVariable: 'DB_PASSWORD'
-                    ),
-                    string(
-                        credentialsId: 'django-secret-key',
-                        variable: 'DJANGO_SECRET_KEY'
-                    )
-                ]) {
-                    dir("${env.BACKEND_DIR}") {
-                        bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe ci\\check_security.py'
-                    }
+                dir("${env.BACKEND_DIR}") {
+                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe ci\\check_security.py'
                 }
                 echo "[OK] Security module check passed."
             }
         }
 
         // ------------------------------------------------------
-        // STAGE 12 - Drift Detection
+        // STAGE 11 - Drift Detection
         // Calcule le drift semantique pour toutes les normes.
         // Produit : artifacts/drift_report.json
         // ------------------------------------------------------
-        stage('12 - Drift Detection') {
+        stage('11 - Drift Detection') {
             steps {
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'postgres-credentials',
-                        usernameVariable: 'DB_USER',
-                        passwordVariable: 'DB_PASSWORD'
-                    ),
-                    string(
-                        credentialsId: 'django-secret-key',
-                        variable: 'DJANGO_SECRET_KEY'
-                    )
-                ]) {
-                    bat 'IF NOT EXIST "%ARTIFACTS_DIR%" mkdir "%ARTIFACTS_DIR%"'
-                    dir("${env.BACKEND_DIR}") {
-                        bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe ci\\run_drift.py'
-                    }
+                bat 'IF NOT EXIST "%ARTIFACTS_DIR%" mkdir "%ARTIFACTS_DIR%"'
+                dir("${env.BACKEND_DIR}") {
+                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe ci\\run_drift.py'
                 }
                 echo "[OK] Drift detection complete."
             }
@@ -404,11 +307,11 @@ pipeline {
         }
 
         // ------------------------------------------------------
-        // STAGE 13 - SonarQube Analysis
+        // STAGE 12 - SonarQube Analysis
         // Execute depuis la RACINE du workspace.
         // Ignore si SKIP_SONAR=true.
         // ------------------------------------------------------
-        stage('13 - SonarQube Analysis') {
+        stage('12 - SonarQube Analysis') {
             when {
                 expression { return !params.SKIP_SONAR }
             }
@@ -416,7 +319,7 @@ pipeline {
                 SCANNER_HOME = tool(name: 'SonarScanner', type: 'hudson.plugins.sonar.SonarRunnerInstallation')
             }
             steps {
-                echo "[INFO] SonarQube Analysis | Build: ${env.BUILD_NUMBER}"
+                echo "[INFO] SonarQube Analysis | Build: ${env.BUILD_NUMBER} | Scanner: ${env.SCANNER_HOME}"
                 dir("${env.WORKSPACE}") {
                     withSonarQubeEnv('SonarQube') {
                         bat "\"${env.SCANNER_HOME}\\bin\\sonar-scanner.bat\" -Dsonar.projectVersion=1.0.${env.BUILD_NUMBER}"
@@ -427,11 +330,11 @@ pipeline {
         }
 
         // ------------------------------------------------------
-        // STAGE 14 - Quality Gate
+        // STAGE 13 - Quality Gate
         // Attend le resultat via webhook. Timeout 10 min.
         // Ignore si SKIP_SONAR=true.
         // ------------------------------------------------------
-        stage('14 - Quality Gate') {
+        stage('13 - Quality Gate') {
             when {
                 expression { return !params.SKIP_SONAR }
             }
@@ -445,42 +348,30 @@ pipeline {
         }
 
         // ------------------------------------------------------
-        // STAGE 15 - ML Training
+        // STAGE 14 - ML Training
         // Entraine les modeles pour les standards selectionnes.
         // Ignore si SKIP_TRAINING=true.
         // ------------------------------------------------------
-        stage('15 - ML Training') {
+        stage('14 - ML Training') {
             when {
                 expression { return !params.SKIP_TRAINING }
             }
             steps {
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'postgres-credentials',
-                        usernameVariable: 'DB_USER',
-                        passwordVariable: 'DB_PASSWORD'
-                    ),
-                    string(
-                        credentialsId: 'django-secret-key',
-                        variable: 'DJANGO_SECRET_KEY'
-                    )
-                ]) {
-                    echo "[INFO] ML Training - Standard: ${params.STANDARD}"
-                    dir("${env.BACKEND_DIR}") {
-                        script {
-                            def std = params.STANDARD
-                            if (std == 'ALL' || std == 'ISO9001') {
-                                echo "[INFO] Training ISO9001..."
-                                bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe ci\\train_standard.py ISO9001'
-                            }
-                            if (std == 'ALL' || std == 'ISO27001') {
-                                echo "[INFO] Training ISO27001..."
-                                bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe ci\\train_standard.py ISO27001'
-                            }
-                            if (std == 'ALL' || std == 'TISAX') {
-                                echo "[INFO] Training TISAX..."
-                                bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe ci\\train_standard.py TISAX'
-                            }
+                echo "[INFO] ML Training - Standard: ${params.STANDARD}"
+                dir("${env.BACKEND_DIR}") {
+                    script {
+                        def std = params.STANDARD
+                        if (std == 'ALL' || std == 'ISO9001') {
+                            echo "[INFO] Training ISO9001..."
+                            bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe ci\\train_standard.py ISO9001'
+                        }
+                        if (std == 'ALL' || std == 'ISO27001') {
+                            echo "[INFO] Training ISO27001..."
+                            bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe ci\\train_standard.py ISO27001'
+                        }
+                        if (std == 'ALL' || std == 'TISAX') {
+                            echo "[INFO] Training TISAX..."
+                            bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe ci\\train_standard.py TISAX'
                         }
                     }
                 }
@@ -489,30 +380,21 @@ pipeline {
         }
 
         // ------------------------------------------------------
-        // STAGE 16 - Export Metrics
+        // STAGE 15 - Export Metrics
         // Exporte Prometheus + evaluation summary.
+        // Produit :
+        //   artifacts/prometheus_metrics.txt
+        //   artifacts/evaluation_summary.json
         // Ignore si SKIP_TRAINING=true.
         // ------------------------------------------------------
-        stage('16 - Export Metrics') {
+        stage('15 - Export Metrics') {
             when {
                 expression { return !params.SKIP_TRAINING }
             }
             steps {
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'postgres-credentials',
-                        usernameVariable: 'DB_USER',
-                        passwordVariable: 'DB_PASSWORD'
-                    ),
-                    string(
-                        credentialsId: 'django-secret-key',
-                        variable: 'DJANGO_SECRET_KEY'
-                    )
-                ]) {
-                    bat 'IF NOT EXIST "%ARTIFACTS_DIR%" mkdir "%ARTIFACTS_DIR%"'
-                    dir("${env.BACKEND_DIR}") {
-                        bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe ci\\export_metrics.py'
-                    }
+                bat 'IF NOT EXIST "%ARTIFACTS_DIR%" mkdir "%ARTIFACTS_DIR%"'
+                dir("${env.BACKEND_DIR}") {
+                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe ci\\export_metrics.py'
                 }
                 echo "[OK] Metrics exported to artifacts/."
             }
@@ -527,38 +409,27 @@ pipeline {
         }
 
         // ------------------------------------------------------
-        // STAGE 17 - TrainingJob Update
-        // Enregistre les TrainingJob en base de donnees.
-        // Ignore si SKIP_TRAINING=true.
+        // STAGE 16 - TrainingJob Update
+        // Enregistre les TrainingJob en base de donnees depuis
+        // les *_metrics.json. Ignore si SKIP_TRAINING=true.
         // ------------------------------------------------------
-        stage('17 - TrainingJob Update') {
+        stage('16 - TrainingJob Update') {
             when {
                 expression { return !params.SKIP_TRAINING }
             }
             steps {
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'postgres-credentials',
-                        usernameVariable: 'DB_USER',
-                        passwordVariable: 'DB_PASSWORD'
-                    ),
-                    string(
-                        credentialsId: 'django-secret-key',
-                        variable: 'DJANGO_SECRET_KEY'
-                    )
-                ]) {
-                    dir("${env.BACKEND_DIR}") {
-                        bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe ci\\update_training_job.py'
-                    }
+                dir("${env.BACKEND_DIR}") {
+                    bat 'chcp 65001 > nul && .venv\\Scripts\\python.exe ci\\update_training_job.py'
                 }
                 echo "[OK] TrainingJob records updated in database."
             }
         }
 
         // ------------------------------------------------------
-        // STAGE 18 - Archive Artifacts
+        // STAGE 17 - Archive Artifacts
+        // Archive tous les artefacts produits.
         // ------------------------------------------------------
-        stage('18 - Archive Artifacts') {
+        stage('17 - Archive Artifacts') {
             steps {
                 archiveArtifacts(
                     artifacts: 'artifacts/**/*',
@@ -570,10 +441,10 @@ pipeline {
         }
 
         // ------------------------------------------------------
-        // STAGE 19 - Cleanup
+        // STAGE 18 - Cleanup
         // Supprime __pycache__ et fichiers .pyc/.pyo.
         // ------------------------------------------------------
-        stage('19 - Cleanup') {
+        stage('18 - Cleanup') {
             steps {
                 bat '''
                     chcp 65001 > nul
