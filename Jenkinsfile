@@ -1,8 +1,4 @@
-//
-=========================================================================
-// Jenkinsfile (structure reconstruite) // IMPORTANT : adapte les
-commandes ci-dessous à ton projet si nécessaire. //
-=========================================================================
+
 
 pipeline { agent any
 
