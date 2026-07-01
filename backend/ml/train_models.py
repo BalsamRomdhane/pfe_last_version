@@ -99,7 +99,8 @@ def _save_model_with_backup(model, model_path: str) -> str:
             shutil.copy2(model_path, backup_path)
         except Exception as exc:
             print(f'Warning: could not backup previous model at {model_path}: {exc}')
-    _save_model_with_backup(model, model_path)
+    # FIX: use joblib.dump() to persist the model — was calling itself recursively
+    joblib.dump(model, model_path)
     return model_path
 
 

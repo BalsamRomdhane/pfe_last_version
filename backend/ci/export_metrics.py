@@ -39,12 +39,13 @@ for mf in sorted(glob.glob(os.path.join(models_dir, '*_metrics.json'))):
     print('[EVAL] %s' % norm_key)
     print('       Best model : %s  |  Samples : %d' % (best, samples))
     for m, v in data.get('results', {}).items():
+        # FIX: guard against None values when a model failed to save
+        f1   = v.get('f1_score')   or 0.0
+        acc  = v.get('accuracy')   or 0.0
+        prec = v.get('precision')  or 0.0
+        rec  = v.get('recall')     or 0.0
         print('       %-22s  f1=%.4f  acc=%.4f  prec=%.4f  rec=%.4f' % (
-            m,
-            v.get('f1_score', 0),
-            v.get('accuracy', 0),
-            v.get('precision', 0),
-            v.get('recall', 0),
+            m, f1, acc, prec, rec,
         ))
     summary.append({'norm': norm_key, 'best_model': best, 'samples': samples})
 
