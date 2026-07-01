@@ -126,14 +126,12 @@ export default function TrainingDataset() {
   const PAGE_SIZE = 10;
   const [loading,   setLoading]   = useState(true);
   const [activeTab, setActiveTab] = useState('overview');
-  const [search,    setSearch]    = useState(''); // eslint-disable-line no-unused-vars
   const [labelFilter, setLabelFilter] = useState('');
-  const [sortBy,    setSortBy]    = useState('-created_at'); // eslint-disable-line no-unused-vars
 
-  /* Load norms */
+  /* Load norms — unified endpoint */
   useEffect(() => {
-    api.get('/norms/').then(r => {
-      const list = Array.isArray(r.data) ? r.data : [];
+    api.get('/normes/').then(r => {
+      const list = Array.isArray(r.data) ? r.data : (r.data?.results || []);
       setNorms(list);
       if (list.length > 0) setNormId(String(list[0].id));
     }).catch(() => {});

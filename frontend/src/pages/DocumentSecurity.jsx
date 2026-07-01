@@ -152,8 +152,8 @@ function DashboardTab() {
     setLoad(true); setError(null);
     try {
       const [s, h] = await Promise.all([
-        api.get('/security/dashboard/statistics/'),
-        api.get('/security/dashboard/high-risk/?page_size=5'),
+        api.get('security/dashboard/statistics/'),
+        api.get('security/dashboard/high-risk/?page_size=5'),
       ]);
       setStats(s.data); setHigh(h.data);
     } catch (e) {
@@ -474,7 +474,7 @@ function AnalysisTab() {
   useEffect(() => {
     if (mode !== 'existing') return;
     setDL(true);
-    api.get('/security/documents/list/')
+    api.get('security/documents/list/')
       .then(r => setDocs(r.data || []))
       .catch(() => setDocs([]))
       .finally(() => setDL(false));
@@ -508,7 +508,7 @@ function AnalysisTab() {
     try {
       const fd = new FormData();
       fd.append('file', file);
-      const res = await api.post('/security/scan/', fd, {
+      const res = await api.post('security/scan/', fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       setUAnal(res.data);
@@ -693,7 +693,7 @@ export default function DocumentSecurity() {
   const [kpis, setKpis] = useState(null);
 
   useEffect(() => {
-    api.get('/security/dashboard/').then(r => setKpis(r.data)).catch(() => {});
+    api.get('security/dashboard/').then(r => setKpis(r.data)).catch(() => {});
   }, []);
 
   return (

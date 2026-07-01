@@ -84,6 +84,55 @@ class Document(models.Model):
     is_finalized = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    # ── Integrity fields (Phase 1 — SHA-256) ─────────────────────────────────
+    sha256_hash = models.CharField(
+        max_length=64,
+        blank=True,
+        default='',
+        help_text='SHA-256 hex digest of the document file, computed at upload.',
+        verbose_name='SHA-256 hash',
+    )
+    hash_algorithm = models.CharField(
+        max_length=16,
+        blank=True,
+        default='sha256',
+        help_text='Algorithm used to compute sha256_hash.',
+        verbose_name='Hash algorithm',
+    )
+    hash_created_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text='Timestamp when the integrity hash was last computed.',
+        verbose_name='Hash computed at',
+    )
+
+    # ── Encryption fields (Phase 4 — AES-256-GCM) ────────────────────────────
+    encrypted = models.BooleanField(
+        default=False,
+        help_text='True when the stored file is AES-256-GCM encrypted.',
+        verbose_name='Encrypted',
+    )
+    encryption_iv = models.CharField(
+        max_length=24,
+        blank=True,
+        default='',
+        help_text='Base64-encoded 12-byte GCM nonce (informational).',
+        verbose_name='Encryption IV (nonce)',
+    )
+    encrypted_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text='Timestamp when encryption was applied.',
+        verbose_name='Encrypted at',
+    )
+    encrypted_key_id = models.CharField(
+        max_length=64,
+        blank=True,
+        default='',
+        help_text='Identifier of the key used (e.g. env_key, kms_key_v2).',
+        verbose_name='Encryption key ID',
+    )
+
     class Meta:
         ordering = ['-created_at']
 

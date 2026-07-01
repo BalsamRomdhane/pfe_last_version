@@ -106,7 +106,13 @@ class NormeSerializer(serializers.ModelSerializer):
 
 
 class DocumentSerializer(serializers.ModelSerializer):
-    file_url = serializers.SerializerMethodField(read_only=True)
+    file_url         = serializers.SerializerMethodField(read_only=True)
+    # Phase 2 — lightweight integrity status
+    integrity_status = serializers.SerializerMethodField(read_only=True)
+    # Phase 6 — authenticated secure view URL (replaces direct file_url access)
+    secure_view_url  = serializers.SerializerMethodField(read_only=True)
+    # Phase 7 — authenticated secure download URL with watermark
+    secure_download_url = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = Document
@@ -127,14 +133,78 @@ class DocumentSerializer(serializers.ModelSerializer):
             'review_completed_at',
             'is_finalized',
             'created_at',
+            # Phase 2 — integrity (read-only)
+            'sha256_hash',
+            'hash_algorithm',
+            'hash_created_at',
+            'integrity_status',
+            # Phase 4 — encryption (read-only)
+            'encrypted',
+            'encrypted_at',
+            'encrypted_key_id',
+            # Phase 6 — secure view URL (read-only)
+            'secure_view_url',
+            # Phase 7 — secure download URL (read-only)
+            'secure_download_url',
         ]
-        read_only_fields = ['employee_username', 'employee_department', 'teamlead_username', 'status', 'created_at', 'file_url', 'approved_by', 'approved_at', 'review_completed_at', 'is_finalized']
+        read_only_fields = [
+            'employee_username', 'employee_department', 'teamlead_username',
+            'status', 'created_at', 'file_url',
+            'approved_by', 'approved_at', 'review_completed_at', 'is_finalized',
+            'sha256_hash', 'hash_algorithm', 'hash_created_at', 'integrity_status',
+            'encrypted', 'encrypted_at', 'encrypted_key_id',
+            'secure_view_url', 'secure_download_url',
+        ]
 
     def get_file_url(self, obj):
         request = self.context.get('request')
         if obj.file and request:
             return request.build_absolute_uri(obj.file.url)
         return None
+
+    def get_integrity_status(self, obj):
+        """
+        Return a lightweight integrity status string for the document list view.
+
+        Values
+        ------
+        'VERIFIED'  — hash present (actual verification happens via /integrity/)
+        'PENDING'   — hash not yet computed (pipeline still running)
+
+        Note: full tamper-detection requires calling the /integrity/ endpoint
+        which re-hashes the file on demand.  This field only tells the frontend
+        whether a hash is on record.
+        """
+        if obj.sha256_hash:
+            return 'VERIFIED'
+        return 'PENDING'
+
+    def get_secure_view_url(self, obj):
+        """
+        Return the authenticated secure-view URL for this document.
+
+        Phase 6: replaces the direct /media/ URL with an endpoint that
+        enforces RBAC and transparently decrypts encrypted documents.
+        The frontend should use this URL instead of file_url for viewing.
+        """
+        request = self.context.get('request')
+        path = f'/api/security/documents/{obj.pk}/view/'
+        if request:
+            return request.build_absolute_uri(path)
+        return path
+
+    def get_secure_download_url(self, obj):
+        """
+        Return the authenticated secure-download URL for this document.
+
+        Phase 7: RBAC-protected download with watermark.
+        The frontend should use this URL for download buttons.
+        """
+        request = self.context.get('request')
+        path = f'/api/security/documents/{obj.pk}/download/'
+        if request:
+            return request.build_absolute_uri(path)
+        return path
 
     def create(self, validated_data):
         request = self.context.get('request')

@@ -1,3 +1,4 @@
+import io
 import os
 import re
 import unicodedata
@@ -164,15 +165,51 @@ def compute_score(features):
 
 
 def extract_document_text(document):
+    """
+    Extract text from a Document model instance.
+
+    Phase 4 — Encryption aware:
+      If document.encrypted is True, the file is decrypted in memory
+      before text extraction. The plaintext NEVER touches the disk.
+      If decryption fails (missing key, tampered file), returns ''.
+    """
     if not document.file:
         return ''
 
-    file_path = getattr(document.file, 'path', None)
-    if not file_path or not os.path.exists(file_path):
-        return ''
+    # ── Encrypted document: decrypt in memory first ───────────────────────────
+    if getattr(document, 'encrypted', False):
+        try:
+            from services.security.encryption import EncryptionService
+            plaintext = EncryptionService.decrypt_in_memory(document.pk)
+            if plaintext is None:
+                return ''
+            file_like = io.BytesIO(plaintext)
+            file_like.name = os.path.basename(document.file.name or '')
+            return extract_text(file_like)
+        except Exception as exc:
+            import logging as _log
+            _log.getLogger(__name__).error(
+                'extract_document_text: decryption failed for Document #%s — %s',
+                document.pk, exc,
+            )
+            return ''
 
-    with open(file_path, 'rb') as f:
-        return extract_text(f)
+    # ── Plaintext document: read via StorageService ───────────────────────────
+    try:
+        from services.document_storage import DocumentStorageService
+        data = DocumentStorageService.read_raw(document.pk)
+        if data is None:
+            return ''
+        file_like = io.BytesIO(data)
+        file_like.name = os.path.basename(document.file.name or '')
+        return extract_text(file_like)
+    except Exception as exc:
+        import logging as _log
+        _log.getLogger(__name__).error(
+            'extract_document_text: read failed for Document #%s — %s',
+            document.pk, exc,
+        )
+        return ''
 
 
 def normalize_text(text):

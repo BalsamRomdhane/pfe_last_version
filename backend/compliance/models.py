@@ -22,6 +22,13 @@ class AuditLog(models.Model):
         RISK_ACCEPT   = 'RISK_ACCEPT',   'Risk Accept'
         RISK_MITIGATE = 'RISK_MITIGATE', 'Risk Mitigate'
         EXPORT        = 'EXPORT',        'Export'
+        # ── Phase 8 — Document security actions ──────────────────────────────
+        VIEW              = 'VIEW',              'Document Viewed'
+        DOWNLOAD          = 'DOWNLOAD',          'Document Downloaded'
+        DECRYPT           = 'DECRYPT',           'Document Decrypted'
+        INTEGRITY_CHECK   = 'INTEGRITY_CHECK',   'Integrity Check'
+        ENCRYPT           = 'ENCRYPT',           'Document Encrypted'
+        SECURITY_ANALYSIS = 'SECURITY_ANALYSIS', 'Security Analysis'
 
     entity_type  = models.CharField(max_length=100)
     entity_id    = models.CharField(max_length=64)

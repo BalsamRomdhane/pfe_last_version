@@ -80,16 +80,21 @@ def run_security_analysis(document_id: int, force: bool = False) -> Optional[obj
             return existing
 
     # ── Extract text and binary content ───────────────────────────────────────
+    # Phase 5 — all file I/O goes through DocumentStorageService.
+    # read_raw() returns the bytes on disk (plaintext before Phase 4 encryption,
+    # ciphertext after). For security_analysis the content must be PLAINTEXT so
+    # we use read_plaintext() which transparently decrypts if needed.
     text = ''
     file_content = b''
     filename = ''
 
     if document.file:
         try:
-            filename = document.file.name or ''
-            document.file.seek(0)
-            file_content = document.file.read()
-            document.file.seek(0)
+            from services.document_storage import DocumentStorageService
+            filename = DocumentStorageService.get_filename(document_id) or document.file.name or ''
+            file_content = DocumentStorageService.read_plaintext(document_id) or b''
+        except PermissionError as exc:
+            logger.warning('security_analysis: decryption key missing for doc #%s: %s', document_id, exc)
         except Exception as exc:
             logger.warning('security_analysis: could not read file for doc #%s: %s', document_id, exc)
 
@@ -159,6 +164,14 @@ def run_security_analysis(document_id: int, force: bool = False) -> Optional[obj
     )
 
     # ── Persist result ────────────────────────────────────────────────────────
+    # ── Classification source (Phase 3 audit fields) ─────────────────────────
+    # Derive a human-readable classification source label from the risk/score
+    # result so the NOT NULL DB column is always populated.
+    classification_source = getattr(score_result, 'classification_source', '') or (
+        f'rule:{score_result.confidentiality_level.lower()}'
+    )
+    classification_rules_matched = getattr(score_result, 'classification_rules_matched', []) or []
+
     analysis_data = {
         'pii_count':              len(pii_matches),
         'pii_types':              pii_counts,
@@ -173,8 +186,10 @@ def run_security_analysis(document_id: int, force: bool = False) -> Optional[obj
              'confidence': m.confidence, 'context': m.context}
             for m in secret_matches
         ],
-        'financial_data_detected': financial_detected,
-        'employee_data_detected':  hr_detected,
+        'financial_data_detected':       financial_detected,
+        'employee_data_detected':        hr_detected,
+        'classification_source':         classification_source,
+        'classification_rules_matched':  classification_rules_matched,
         'metadata_risk':           metadata_risk,
         'metadata_details': {
             'author':          metadata_result.author           if metadata_result else None,

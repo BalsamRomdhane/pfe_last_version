@@ -6,6 +6,8 @@ import StatusBadge from './StatusBadge';
 import PipelineStepper from './PipelineStepper';
 import InvalidRulesList from './InvalidRulesList';
 import EmptyState from './common/EmptyState';
+import TeamLeadSecurityReport from './TeamLeadSecurityReport';
+import { useDocumentSecurity } from '../hooks/useDocumentSecurity';
 import api from '../services/api';
 import {
   ClipboardList, FileText, ArrowRight, Search, CheckCircle2,
@@ -80,6 +82,14 @@ const Validations = () => {
   const [saving,            setSaving]             = useState(false);
   const [error,             setError]              = useState('');
   const [message,           setMessage]            = useState('');
+
+  // Phase 10 — security report for the selected document (TeamLead read-only)
+  const { analysis: securityAnalysis, loading: securityLoading } = useDocumentSecurity({
+    docId: selectedDocument?.id ?? null,
+    autoFetch: !!(selectedDocument?.id),
+    maxAttempts: 8,
+    interval: 3000,
+  });
 
   /* Debounce */
   useEffect(() => {
@@ -479,6 +489,30 @@ const Validations = () => {
               </div>
             )}
           </div>
+
+          {/* ── Right: Security Report (TeamLead only, read-only) ── */}
+          {!isEmployee && (
+            <div className="space-y-4">
+              {selectedDocument ? (
+                <TeamLeadSecurityReport
+                  analysis={securityAnalysis}
+                  loading={securityLoading && !securityAnalysis}
+                  integrityStatus={selectedDocument?.integrity_status || null}
+                  encrypted={!!selectedDocument?.encrypted}
+                  hashCreatedAt={selectedDocument?.hash_created_at}
+                />
+              ) : (
+                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-5 flex flex-col items-center gap-3 text-center">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-200">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-slate-400"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                  </div>
+                  <p className="text-xs text-slate-400 max-w-[200px]">
+                    Sélectionnez un document pour voir son rapport de sécurité.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* ── Rejection feedback for employees ── */}

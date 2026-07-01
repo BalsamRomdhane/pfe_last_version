@@ -28,6 +28,7 @@ const UploadBox = ({
   onFileChange,
   onFileRemove,
   uploading,
+  uploadProgress = 0,
   error,
   onError,
   onSubmit,
@@ -201,11 +202,21 @@ const UploadBox = ({
       )}
 
       {uploading && (
-        <div className="overflow-hidden rounded-3xl border border-slate-200 bg-slate-100">
-          <div className="h-2 bg-slate-300">
-            <div className="h-2 w-full animate-pulse bg-sky-500" />
+        <div className="overflow-hidden rounded-3xl border border-slate-200 bg-slate-50">
+          {/* Real progress bar */}
+          <div className="h-2 bg-slate-200 overflow-hidden">
+            <div
+              className="h-2 bg-sky-500 transition-all duration-300 ease-out"
+              style={{ width: `${uploadProgress > 0 ? uploadProgress : 100}%`,
+                       animation: uploadProgress === 0 ? 'pulse 1.5s infinite' : 'none' }}
+            />
           </div>
-          <div className="px-4 py-3 text-sm text-slate-600">Uploading…</div>
+          <div className="flex items-center justify-between px-4 py-3 text-sm text-slate-600">
+            <span>Envoi en cours…</span>
+            {uploadProgress > 0 && (
+              <span className="text-xs font-semibold text-sky-600">{uploadProgress}%</span>
+            )}
+          </div>
         </div>
       )}
 

@@ -356,6 +356,17 @@ CACHES = {
 # They are safe to enable in both development and production.
 SECURE_REFERRER_POLICY = 'strict-origin-when-cross-origin'
 
+# ── Document Encryption (Phase 4 — AES-256-GCM) ───────────────────────────────
+# DOCUMENT_ENCRYPTION_KEY must be a URL-safe base64-encoded 32-byte value.
+# Generate: python -c "import os,base64; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"
+# NEVER hardcode — read from environment only.
+# If not set, encryption is disabled (documents stored in plaintext).
+DOCUMENT_ENCRYPTION_KEY = os.environ.get('DOCUMENT_ENCRYPTION_KEY', '')
+
+# ENCRYPT_INTERNAL_DOCS: set to True to also encrypt INTERNAL-classified documents.
+# CONFIDENTIAL and RESTRICTED documents are always encrypted when a key is present.
+ENCRYPT_INTERNAL_DOCS = os.environ.get('ENCRYPT_INTERNAL_DOCS', 'False').lower() in ('true', '1', 'yes')
+
 # Logging Configuration
 LOGGING = {
     'version': 1,
