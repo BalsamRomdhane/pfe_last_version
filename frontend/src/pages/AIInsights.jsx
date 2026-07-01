@@ -3,7 +3,7 @@
  * Enterprise ISO Compliance Platform
  * Toutes les données proviennent des API backend réelles.
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Brain, Sparkles, Activity, Database, BarChart3, MessageSquare,
@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import api from '../services/api';
+import { UserContext } from '../context/UserContext';
 
 /* ── Constantes ──────────────────────────────────────────────────── */
 const TABS = [
@@ -1616,6 +1617,9 @@ function AssistantTab({ llmAvailable, standards }) {
    MAIN PAGE
 ══════════════════════════════════════════════════════════════════ */
 export default function AIInsights() {
+  const { user } = useContext(UserContext);
+  const canViewMlops = user?.role === 'ADMIN' || user?.role === 'TEAMLEAD';
+
   const [activeTab, setActiveTab] = useState('overview');
   const [overviewData, setOverviewData] = useState(null);
   const [overviewLoading, setOverviewLoading] = useState(true);
@@ -1650,12 +1654,13 @@ export default function AIInsights() {
 
   useEffect(() => {
     loadOverview();
-    loadMlops();
-  }, [loadOverview, loadMlops]);
+    if (canViewMlops) loadMlops();
+    else setMlopsLoading(false);
+  }, [loadOverview, loadMlops, canViewMlops]);
 
   const handleRefresh = () => {
     loadOverview();
-    loadMlops();
+    if (canViewMlops) loadMlops();
   };
 
   const llmAvailable = overviewData?.llm?.available ?? false;

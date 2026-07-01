@@ -21,7 +21,7 @@ class EvidencePage {
     this.trainMemoryButton   = page.getByRole('button', { name: /train memory/i });
 
     // Knowledge Base section
-    this.kbHeader    = page.getByText('Knowledge Base');
+    this.kbHeader    = page.getByText('Knowledge Base', { exact: true });
     this.addButton   = page.getByRole('button', { name: /^add$/i });
     this.csvExport   = page.getByRole('button', { name: /csv/i });
     this.jsonExport  = page.getByRole('button', { name: /json/i });

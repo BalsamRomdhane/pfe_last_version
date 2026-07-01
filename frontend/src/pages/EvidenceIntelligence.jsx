@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useContext, useEffect, useState, useCallback, useMemo } from 'react';
 import {
   Search, Brain, Sparkles, RefreshCw, Database,
   CheckCircle2, XCircle, Zap, ChevronLeft, ChevronRight,
@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import api from '../services/api';
+import { UserContext } from '../context/UserContext';
 import AnalyzeDocumentModal from '../components/analysis/AnalyzeDocumentModal';
 
 /* ── Helpers ─────────────────────────────────────────────────────────────── */
@@ -253,6 +254,9 @@ function AnalyticsTab({ normFilter }) {
 
 /* ── Main Page ───────────────────────────────────────────────────────────── */
 export default function EvidenceIntelligence() {
+  const { user } = useContext(UserContext);
+  const isAdmin = user?.role === 'ADMIN';
+
   /* ── State ── */
   const [summary, setSummary]             = useState({});
   const [summaryLoading, setSummaryLoading] = useState(true);
@@ -903,10 +907,12 @@ export default function EvidenceIntelligence() {
                   </div>
                 ))}
                 <div className="sm:col-span-2">
-                  <button onClick={handleTrain} disabled={trainLoading}
-                    className="inline-flex items-center gap-2 rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60">
-                    <Zap size={15} /> {trainLoading ? 'Training…' : 'Rebuild Semantic Index'}
-                  </button>
+                  {isAdmin && (
+                    <button onClick={handleTrain} disabled={trainLoading}
+                      className="inline-flex items-center gap-2 rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60">
+                      <Zap size={15} /> {trainLoading ? 'Training…' : 'Rebuild Semantic Index'}
+                    </button>
+                  )}
                 </div>
               </div>
             )}

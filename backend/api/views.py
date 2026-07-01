@@ -3994,7 +3994,7 @@ def mlops_jenkins_status_api(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, IsAdmin])
+@permission_classes([IsAuthenticated, IsTeamLeadOrAdmin])
 def mlops_status_api(request):
     """
     GET /api/ml/mlops/status/
