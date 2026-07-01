@@ -1,4 +1,4 @@
-﻿// ══════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════
 // Jenkinsfile — Enterprise ISO Compliance Platform
 // Pipeline MLOps + DevSecOps — Windows local, sans Docker
 //
