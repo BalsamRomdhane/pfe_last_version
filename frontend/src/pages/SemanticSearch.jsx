@@ -106,7 +106,7 @@ export default function SemanticSearch() {
 
   /* Load norms */
   useEffect(() => {
-    api.get('/norms/').then(res => {
+    api.get('/normes/').then(res => {
       const norms = Array.isArray(res.data) ? res.data : (res.data?.results || []);
       const opts  = norms.map(n => ({ value: n.name, label: n.name }));
       setStandards(opts);

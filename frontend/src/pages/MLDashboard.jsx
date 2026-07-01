@@ -74,10 +74,7 @@ export default function MLDashboard() {
   const [selectedNorm, setSelectedNorm] = useState(null);
   const [datasetType, setDatasetType]   = useState('classification');
   const [datasetStats, setDatasetStats] = useState(null);
-  const [datasetSamples, setDatasetSamples] = useState([]); // eslint-disable-line no-unused-vars
   const [diagnostics, setDiagnostics]   = useState(null);
-  const [datasetPage, setDatasetPage]   = useState(1); // eslint-disable-line no-unused-vars
-  const [expandedSamples, setExpandedSamples] = useState(new Set()); // eslint-disable-line no-unused-vars
   const [models, setModels]             = useState([]);
   const [bestModel, setBestModel]       = useState(null);
   const [selectedModel, setSelectedModel] = useState(null);
@@ -101,22 +98,16 @@ export default function MLDashboard() {
 
   const fetchNorms = async () => {
     setNormsLoading(true); setAlert(null);
-    let normsData = [];
     try {
-      for (const ep of ["/norms/", "/normes/"]) {
-        try {
-          const res = await api.get(ep);
-          normsData = Array.isArray(res.data) ? res.data : res.data.results || [];
-          if (normsData.length > 0) break;
-        } catch (e) { if (e.response?.status !== 404) throw e; }
-      }
-      if (!normsData.length) throw new Error("No norms");
+      // Unified endpoint — consistent with all other pages
+      const res = await api.get('/normes/');
+      const normsData = Array.isArray(res.data) ? res.data : (res.data?.results || []);
+      if (!normsData.length) throw new Error('No norms');
       setNorms(normsData);
       setSelectedNormId(String(normsData[0].id));
       setSelectedNorm(normsData[0]);
     } catch (err) {
-      console.error(err);
-      setAlert({ type: "error", message: "Impossible de charger les normes." });
+      setAlert({ type: 'error', message: 'Impossible de charger les normes.' });
     } finally { setNormsLoading(false); }
   };
 
@@ -126,27 +117,16 @@ export default function MLDashboard() {
     setModels([]); setBestModel(null); setSelectedModel(null); setTestResult(null);
   };
 
-  const toggleSampleExpanded = (_id) => { // eslint-disable-line no-unused-vars
-    setExpandedSamples(cur => { const n = new Set(cur); n.has(_id) ? n.delete(_id) : n.add(_id); return n; });
-  };
-
   const fetchDatasetStats = useCallback(async (normId) => {
     setStatsLoading(true);
     try {
       const res = await api.get(`/dataset-stats/?norm_id=${normId}&dataset_type=${datasetType}`);
-      setDatasetStats(res.data); setDatasetSamples(res.data.samples || []);
-      setDatasetPage(1); setExpandedSamples(new Set());
-    } catch { setDatasetStats(null); setDatasetSamples([]); }
+      setDatasetStats(res.data);
+    } catch { setDatasetStats(null); }
     finally { setStatsLoading(false); }
   }, [datasetType]);
 
-  // eslint-disable-next-line no-unused-vars
-  const PAGE_SIZE = 10;
-  // eslint-disable-next-line no-unused-vars
-  const getPagedSamples = () => datasetSamples.slice((datasetPage-1)*PAGE_SIZE, datasetPage*PAGE_SIZE);
-  const totalDatasetPages = Math.max(1, Math.ceil(datasetSamples.length / PAGE_SIZE));
-  // eslint-disable-next-line no-unused-vars
-  const goToPage = (p) => setDatasetPage(Math.max(1, Math.min(totalDatasetPages, p)));
+  const totalDatasetPages = 1; // kept for potential future use
 
   const fetchModels = useCallback(async (normId) => {
     setCompareLoading(true); setAlert(null);

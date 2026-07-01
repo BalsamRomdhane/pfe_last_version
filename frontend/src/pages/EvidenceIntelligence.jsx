@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useContext, useEffect, useState, useCallback, useMemo } from 'react';
 import {
   Search, Brain, Sparkles, RefreshCw, Database,
   CheckCircle2, XCircle, Zap, ChevronLeft, ChevronRight,
@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import api from '../services/api';
+import { UserContext } from '../context/UserContext';
 import AnalyzeDocumentModal from '../components/analysis/AnalyzeDocumentModal';
 
 /* ── Helpers ─────────────────────────────────────────────────────────────── */
@@ -114,8 +115,10 @@ function Pagination({ page, pages, total, pageSize, onPage }) {
           <ChevronLeft size={13} /> Previous
         </button>
         {lo > 1 && (
-          <><button onClick={() => onPage(1)} className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50">1</button>
-          <span className="text-xs text-slate-400">…</span></>
+          <React.Fragment key="start-ellipsis">
+            <button onClick={() => onPage(1)} className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50">1</button>
+            <span className="text-xs text-slate-400">…</span>
+          </React.Fragment>
         )}
         {nums.map(n => (
           <button key={n} onClick={() => onPage(n)}
@@ -124,8 +127,10 @@ function Pagination({ page, pages, total, pageSize, onPage }) {
             }`}>{n}</button>
         ))}
         {hi < pages && (
-          <><span className="text-xs text-slate-400">…</span>
-          <button onClick={() => onPage(pages)} className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50">{pages}</button></>
+          <React.Fragment key="end-ellipsis">
+            <span className="text-xs text-slate-400">…</span>
+            <button onClick={() => onPage(pages)} className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50">{pages}</button>
+          </React.Fragment>
         )}
         <button onClick={() => onPage(page + 1)} disabled={page >= pages}
           className="flex h-8 items-center gap-1 rounded-lg border border-slate-200 px-2 text-xs text-slate-500 transition hover:bg-slate-50 disabled:opacity-40">
@@ -249,6 +254,9 @@ function AnalyticsTab({ normFilter }) {
 
 /* ── Main Page ───────────────────────────────────────────────────────────── */
 export default function EvidenceIntelligence() {
+  const { user } = useContext(UserContext);
+  const isAdmin = user?.role === 'ADMIN';
+
   /* ── State ── */
   const [summary, setSummary]             = useState({});
   const [summaryLoading, setSummaryLoading] = useState(true);
@@ -899,10 +907,12 @@ export default function EvidenceIntelligence() {
                   </div>
                 ))}
                 <div className="sm:col-span-2">
-                  <button onClick={handleTrain} disabled={trainLoading}
-                    className="inline-flex items-center gap-2 rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60">
-                    <Zap size={15} /> {trainLoading ? 'Training…' : 'Rebuild Semantic Index'}
-                  </button>
+                  {isAdmin && (
+                    <button onClick={handleTrain} disabled={trainLoading}
+                      className="inline-flex items-center gap-2 rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60">
+                      <Zap size={15} /> {trainLoading ? 'Training…' : 'Rebuild Semantic Index'}
+                    </button>
+                  )}
                 </div>
               </div>
             )}

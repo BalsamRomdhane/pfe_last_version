@@ -385,36 +385,8 @@ export default function AnalyzeDocumentModal({ isOpen, onClose, norms = [], defa
             </div>
 
             {/* ── FOOTER ── */}
-            {(phase === 'idle' || phase === 'error') && (
-              <div className="shrink-0 border-t border-slate-100 bg-white/80 px-6 py-4 backdrop-blur-sm">
-                <div className="flex items-center gap-3">
-                  {phase === 'results' || phase === 'loading' ? null : (
-                    <>
-                      <button
-                        type="button"
-                        onClick={onClose}
-                        className="rounded-full border border-slate-200 px-5 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleAnalyze}
-                        disabled={!file}
-                        className="flex flex-1 items-center justify-center gap-2 rounded-full bg-gradient-to-r from-sky-500 to-violet-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-sky-500/25 transition hover:from-sky-400 hover:to-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        <Brain size={16} />
-                        Analyze with AI
-                        <Sparkles size={14} className="opacity-70" />
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {phase === 'results' && (
-              <div className="shrink-0 border-t border-slate-100 bg-white/80 px-6 py-4 backdrop-blur-sm">
+            <div className="shrink-0 border-t border-slate-100 bg-white/80 px-6 py-4 backdrop-blur-sm">
+              {phase === 'results' ? (
                 <button
                   type="button"
                   onClick={reset}
@@ -422,8 +394,30 @@ export default function AnalyzeDocumentModal({ isOpen, onClose, norms = [], defa
                 >
                   Analyze another document
                 </button>
-              </div>
-            )}
+              ) : phase === 'loading' ? (
+                <div className="h-10" />
+              ) : (
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    className="rounded-full border border-slate-200 px-5 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleAnalyze}
+                    disabled={!file}
+                    className="flex flex-1 items-center justify-center gap-2 rounded-full bg-gradient-to-r from-sky-500 to-violet-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-sky-500/25 transition hover:from-sky-400 hover:to-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Brain size={16} />
+                    Analyze with AI
+                    <Sparkles size={14} className="opacity-70" />
+                  </button>
+                </div>
+              )}
+            </div>
           </motion.div>
         </>
       )}

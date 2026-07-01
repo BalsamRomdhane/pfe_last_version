@@ -100,6 +100,21 @@ class DocumentSecurityAnalysis(models.Model):
     recommendations = models.JSONField(default=list, blank=True,
                                        help_text='Ordered list of security recommendations')
 
+    # ── Classification audit (Phase 3) ────────────────────────────────────────
+    classification_source = models.CharField(
+        max_length=64,
+        blank=True,
+        default='',
+        help_text='Name of the classification rule that determined the final level.',
+        verbose_name='Classification source',
+    )
+    classification_rules_matched = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='List of all classification rule names that fired.',
+        verbose_name='Matched classification rules',
+    )
+
     # ── Audit trail ───────────────────────────────────────────────────────────
     analysis_date    = models.DateTimeField(default=timezone.now)
     analysis_version = models.CharField(max_length=20, default='1.0.0')

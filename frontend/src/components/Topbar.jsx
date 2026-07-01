@@ -188,11 +188,20 @@ function NotificationBell() {
 const Topbar = ({ onToggleSidebar }) => {
   const { user, logout } = useContext(UserContext);
   const navigate = useNavigate();
-  const [search, setSearch]   = useState('');
+  const [search, setSearch]     = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
 
   const handleLogout = () => { logout(); navigate('/login'); };
+
+  /* Navigate on Enter / submit search */
+  const handleSearchSubmit = (e) => {
+    e.preventDefault();
+    const q = search.trim();
+    if (!q) return;
+    navigate(`/documents?search=${encodeURIComponent(q)}`);
+    setSearch('');
+  };
 
   useEffect(() => {
     const h = (e) => { if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false); };
@@ -219,13 +228,16 @@ const Topbar = ({ onToggleSidebar }) => {
           </button>
 
           {/* Search bar */}
-          <div className="hidden items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 sm:flex">
+          <form
+            onSubmit={handleSearchSubmit}
+            className="hidden items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 sm:flex"
+          >
             <Search size={14} className="text-slate-400 shrink-0" />
             <input
               type="search"
               value={search}
               onChange={e => setSearch(e.target.value)}
-              placeholder="Search..."
+              placeholder="Rechercher des documents…"
               className="w-44 bg-transparent text-sm text-slate-900 placeholder:text-slate-400 outline-none lg:w-60"
             />
             {search && (
@@ -233,7 +245,7 @@ const Topbar = ({ onToggleSidebar }) => {
                 <X size={13} />
               </button>
             )}
-          </div>
+          </form>
         </div>
 
         {/* Right */}

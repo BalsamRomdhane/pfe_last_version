@@ -61,10 +61,10 @@ export default function DatasetQuality() {
   const [deduping, setDeduping] = useState(false);
   const [dedupMsg, setDedupMsg] = useState('');
 
-  // Load norms
+  // Load norms — unified endpoint /normes/ (consistent with all other pages)
   useEffect(() => {
-    api.get('/norms/').then(r => {
-      const list = Array.isArray(r.data) ? r.data : [];
+    api.get('/normes/').then(r => {
+      const list = Array.isArray(r.data) ? r.data : (r.data?.results || []);
       setNorms(list);
       if (list.length > 0) setNormId(String(list[0].id));
     }).catch(() => {});

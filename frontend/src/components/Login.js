@@ -374,6 +374,17 @@ const Login = () => {
                 </button>
               }/>
 
+            {/* Forgot password */}
+            <div className="text-right -mt-1">
+              <button
+                type="button"
+                onClick={() => navigate('/reset-password')}
+                className="text-xs text-blue-400/80 hover:text-blue-300 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 rounded"
+              >
+                Forgot password?
+              </button>
+            </div>
+
             {/* Submit */}
             <motion.button type="submit"
               disabled={loading || !form.login || !form.password}

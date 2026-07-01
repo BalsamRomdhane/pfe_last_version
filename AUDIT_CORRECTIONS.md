@@ -261,3 +261,43 @@ ou créer un second job `compliance-ml-pipeline-prod`.
 ❌ Jenkinsfile.soutenance               → supprimé
 ❌ Jenkinsfile.production               → supprimé
 ```
+
+---
+
+## B. CORRECTIONS — Architecture de Sécurité Documentaire (Phases 1–13)
+
+### Revue Phase 1 — Corrections appliquées
+
+| Point | Problème initial | Correction |
+|---|---|---|
+| 1 | Pas de `DocumentIntegrityService` — fonctions libres seulement | Classe `DocumentIntegrityService` avec `compute_and_persist()` et `verify_document()` |
+| 2 | 2 threads indépendants (hash + analyse) | Pipeline séquentiel unique `doc-security-pipeline-{id}` |
+| 3 | Hash calculé uniquement à la création | Signal déclenche aussi sur remplacement de fichier (`_file_has_changed()`) |
+| 4 | `sha256_hash` max_length=64, pas `unique` | Confirmé correct, aucune modification |
+| 5 | Index conditionnel `models.Q(sha256_hash__gt='')` non supporté | Simplifié sans condition |
+| 6 | Threads daemon + Windows = `psycopg2 "database is in use"` | `connection.close()` dans `finally` du pipeline ; `join()` dans `tearDown` |
+| 7 | Pipeline non extensible pour futures phases | Stubs commentés pour Phase 3/4 dans le pipeline |
+
+### Nouvelles migrations créées
+
+- `api/0018_document_integrity_fields` — SHA-256 fields
+- `api/0019_document_encryption_fields` — AES-256 fields
+- `api/0020_alter_document_encrypted_key_id_and_more` — Réconciliation
+- `security/0002_rename_indexes` — Renommage auto
+- `security/0003_classification_fields` — Classification audit
+- `compliance/0002_auditlog_document_security_actions` — Nouvelles actions
+
+### État final des tests
+
+```
+Phase 1 (hashing)       : 36/36  ✅
+Phase 2 (integrity API)  : 20/20  ✅
+Phase 3 (classification) : 50/50  ✅
+Phase 4 (encryption)     : 42/42  ✅
+Phase 5 (storage)        : 30/30  ✅
+Phase 6 (secure view)    : 22/22  ✅
+Phase 7 (download/wm)    : 31/31  ✅
+Phase 8 (audit)          : 32/32  ✅
+─────────────────────────────────
+TOTAL                    : 263/263 ✅
+```

@@ -14,6 +14,11 @@ import Validations from './components/Validations';
 import System      from './components/System';
 import ResetPassword from './components/ResetPassword';
 
+// ── Employee pages ─────────────────────────────────────────────────────────────
+import EmployeeProfile       from './pages/employee/EmployeeProfile';
+import EmployeeNotifications from './pages/employee/EmployeeNotifications';
+import DocumentDetail        from './pages/employee/DocumentDetail';
+
 // ── Pages ─────────────────────────────────────────────────────────────────────
 import TrainingDataset      from './pages/TrainingDataset';
 import MLDashboard          from './pages/MLDashboard';
@@ -92,7 +97,12 @@ function AppContent() {
         {/* All roles */}
         <Route path="/dashboard"  element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
         <Route path="/documents"  element={<ProtectedRoute><Documents /></ProtectedRoute>} />
+        <Route path="/documents/:id" element={<ProtectedRoute><DocumentDetail /></ProtectedRoute>} />
         <Route path="/system"     element={<ProtectedRoute><System /></ProtectedRoute>} />
+
+        {/* Employee-specific pages */}
+        <Route path="/profile"       element={<ProtectedRoute><EmployeeProfile /></ProtectedRoute>} />
+        <Route path="/notifications" element={<ProtectedRoute><EmployeeNotifications /></ProtectedRoute>} />
 
         <Route path="/validations" element={
           <RoleProtectedRoute roles={['ADMIN','TEAMLEAD']}>

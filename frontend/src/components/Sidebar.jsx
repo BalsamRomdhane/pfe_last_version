@@ -6,7 +6,7 @@ import {
   LayoutDashboard, FileText, ClipboardCheck, BookOpen,
   ScanSearch, Layers, Brain, ShieldCheck, Users, Building2,
   Settings, ChevronDown, X, Bell, Activity, Database,
-  BarChart3, GitBranch, Sparkles, Lock,
+  BarChart3, GitBranch, Sparkles, Lock, User,
 } from 'lucide-react';
 
 /* ─── Navigation tree ──────────────────────────────────────────────────── */
@@ -14,10 +14,16 @@ const NAV = [
   {
     title: 'Overview',
     items: [
-      { label: 'Dashboard',   icon: LayoutDashboard, path: '/dashboard',  roles: ['ADMIN','TEAMLEAD','EMPLOYEE'] },
-      { label: 'Documents',   icon: FileText,        path: '/documents',  roles: ['ADMIN','TEAMLEAD','EMPLOYEE'] },
-      // Validations: EMPLOYEE sees it but with read-only view (own docs only — enforced backend)
-      { label: 'Validations', icon: ClipboardCheck,  path: '/validations',roles: ['ADMIN','TEAMLEAD'] },
+      { label: 'Dashboard',   icon: LayoutDashboard, path: '/dashboard',      roles: ['ADMIN','TEAMLEAD','EMPLOYEE'] },
+      { label: 'Documents',   icon: FileText,        path: '/documents',      roles: ['ADMIN','TEAMLEAD','EMPLOYEE'] },
+      { label: 'Validations', icon: ClipboardCheck,  path: '/validations',   roles: ['ADMIN','TEAMLEAD'] },
+    ],
+  },
+  {
+    title: 'Mon espace',
+    items: [
+      { label: 'Notifications', icon: Bell,  path: '/notifications', roles: ['EMPLOYEE'] },
+      { label: 'Mon profil',    icon: User,  path: '/profile',       roles: ['EMPLOYEE'] },
     ],
   },
   {
@@ -46,7 +52,7 @@ const NAV = [
     items: [
       { label: 'Users',       icon: Users,     path: '/users',       roles: ['ADMIN'] },
       { label: 'Departments', icon: Building2, path: '/departments', roles: ['ADMIN'] },
-      { label: 'System',      icon: Settings,  path: '/system',      roles: ['ADMIN','TEAMLEAD','EMPLOYEE'] },
+      { label: 'System',      icon: Settings,  path: '/system',      roles: ['ADMIN','TEAMLEAD'] },
     ],
   },
 ];
@@ -189,24 +195,26 @@ const Sidebar = ({ mobileOpen, onClose }) => {
           ))}
         </nav>
 
-        {/* ── Notifications shortcut ── */}
-        <div className="border-t border-white/[0.06] px-3 py-2 shrink-0">
-          <Link
-            to="/dashboard"
-            onClick={onClose}
-            className="flex items-center justify-between rounded-lg px-3 py-2 text-slate-500 hover:bg-white/[0.05] hover:text-slate-300 transition-colors"
-          >
-            <div className="flex items-center gap-2">
-              <Bell size={13} />
-              <span className="text-xs font-medium">Notifications</span>
-            </div>
-            {unreadCount > 0 && (
-              <span className="flex h-4 min-w-[16px] items-center justify-center rounded-full bg-red-500 px-1 text-2xs font-bold text-white">
-                {unreadCount > 99 ? '99+' : unreadCount}
-              </span>
-            )}
-          </Link>
-        </div>
+        {/* ── Notifications shortcut (Admin/TeamLead only — Employee has it in nav) ── */}
+        {role !== 'EMPLOYEE' && (
+          <div className="border-t border-white/[0.06] px-3 py-2 shrink-0">
+            <Link
+              to="/dashboard"
+              onClick={onClose}
+              className="flex items-center justify-between rounded-lg px-3 py-2 text-slate-500 hover:bg-white/[0.05] hover:text-slate-300 transition-colors"
+            >
+              <div className="flex items-center gap-2">
+                <Bell size={13} />
+                <span className="text-xs font-medium">Notifications</span>
+              </div>
+              {unreadCount > 0 && (
+                <span className="flex h-4 min-w-[16px] items-center justify-center rounded-full bg-red-500 px-1 text-2xs font-bold text-white">
+                  {unreadCount > 99 ? '99+' : unreadCount}
+                </span>
+              )}
+            </Link>
+          </div>
+        )}
 
         {/* ── User profile ── */}
         <div className="border-t border-white/[0.06] p-3 shrink-0">
