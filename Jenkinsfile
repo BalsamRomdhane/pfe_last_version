@@ -1,4 +1,3 @@
-
 pipeline {
     agent any
 
@@ -13,11 +12,10 @@ pipeline {
         PYTHONUTF8       = "1"
 
         // PostgreSQL — adapter selon la machine locale
-        DB_HOST     = "localhost"
-        DB_PORT     = "5432"
-        DB_NAME     = "compliance_db"
-        DB_USER     = "postgres"
-        DB_PASSWORD = ""
+        DB_HOST = "localhost"
+        DB_PORT = "5432"
+        DB_NAME = "compliance_db"
+        DB_USER = "postgres"
     }
 
     // ── Parametres de build ─────────────────────────────────────────
@@ -237,9 +235,9 @@ pipeline {
             steps {
                 echo "[INFO] Attente du Quality Gate SonarQube (timeout 10 min)..."
                 timeout(time: 10, unit: 'MINUTES') {
-                    waitForQualityGate abortPipeline: false
+                    waitForQualityGate abortPipeline: true
                 }
-                echo "[OK] Quality Gate check complete (pipeline continues regardless of result)."
+                echo "[OK] Quality Gate passe avec succes."
             }
         }
 
