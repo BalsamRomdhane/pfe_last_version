@@ -692,7 +692,6 @@ const TABS = [
 export default function DocumentSecurity() {
   // Defense-in-depth: route is already ADMIN+TEAMLEAD only in App.js
   const { user } = useContext(UserContext);
-  if (user && user.role === 'EMPLOYEE') return null;
 
   const [tab, setTab] = useState('dashboard');
   const [kpis, setKpis] = useState(null);
@@ -700,6 +699,9 @@ export default function DocumentSecurity() {
   useEffect(() => {
     api.get('security/dashboard/').then(r => setKpis(r.data)).catch(() => {});
   }, []);
+
+  // Guard placed AFTER all hooks (rules-of-hooks compliance)
+  if (user && user.role === 'EMPLOYEE') return null;
 
   return (
     <Layout>

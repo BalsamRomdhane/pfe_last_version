@@ -80,7 +80,6 @@ function RuleResult({ rule, index }) {
 export default function DocumentAnalysis() {
   // Defense-in-depth: route is ADMIN+TEAMLEAD only in App.js
   const { user } = useContext(UserContext);
-  if (user && user.role === 'EMPLOYEE') return null;
   const [normes,          setNormes]          = useState([]);
   const [selectedNormeId, setSelectedNormeId] = useState(null);
   const [file,            setFile]            = useState(null);
@@ -124,6 +123,9 @@ export default function DocumentAnalysis() {
   const validCount   = analysis?.valid_count   || 0;
   const invalidCount = analysis?.invalid_count || 0;
   const totalRules   = analysis?.total_rules   || 0;
+
+  // Guard placed AFTER all hooks (rules-of-hooks compliance)
+  if (user && user.role === 'EMPLOYEE') return null;
 
   return (
     <Layout>

@@ -56,7 +56,6 @@ function QualityBar({ label, value, max = 100 }) {
 export default function DatasetQuality() {
   // Defense-in-depth: route is already ADMIN-only in App.js
   const { user } = useContext(UserContext);
-  if (user && user.role !== 'ADMIN') return null;
   const [report,   setReport]   = useState(null);
   const [loading,  setLoading]  = useState(true);
   const [error,    setError]    = useState('');
@@ -99,6 +98,9 @@ export default function DatasetQuality() {
   };
 
   const ev         = report?.evidence || {};
+
+  // Guard placed AFTER all hooks (rules-of-hooks compliance)
+  if (user && user.role !== 'ADMIN') return null;
   const dups       = {
     total:           ev.total ?? 0,
     unique:          ev.unique ?? 0,

@@ -118,7 +118,6 @@ function CoverageRow({ rule, total, approved, rejected }) {
 export default function TrainingDataset() {
   // Defense-in-depth: route is already ADMIN-only in App.js
   const { user } = useContext(UserContext);
-  if (user && user.role !== 'ADMIN') return null;
   const [norms,     setNorms]     = useState([]);
   const [normId,    setNormId]    = useState('');
   const [stats,     setStats]     = useState(null);
@@ -216,6 +215,9 @@ export default function TrainingDataset() {
   ];
 
   const totalPages = Math.max(1, Math.ceil(sTotal / PAGE_SIZE));
+
+  // Guard placed AFTER all hooks (rules-of-hooks compliance)
+  if (user && user.role !== 'ADMIN') return null;
 
   return (
     <Layout>

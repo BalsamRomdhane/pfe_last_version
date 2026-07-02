@@ -67,13 +67,6 @@ function RuleRow({ item, index, onChange }) {
 /* ─── Validations page ─────────────────────────────────────────────────── */
 const Validations = () => {
   const { user }            = useContext(UserContext);
-
-  // Defense-in-depth: employees must never reach this page.
-  // The route is already protected in App.js (ADMIN + TEAMLEAD only).
-  if (user && user.role === 'EMPLOYEE') {
-    return <Navigate to="/dashboard" replace />;
-  }
-
   const [searchParams, setSearchParams] = useSearchParams();
   const [selectedDocument,  setSelectedDocument]  = useState(null);
   const [docSearch,         setDocSearch]          = useState('');
@@ -214,6 +207,11 @@ const Validations = () => {
   const docStatus           = selectedDocument?.status;
   const invalidSubmitted    = useMemo(() => (selectedDocument?.validations || []).filter(v => !v.is_valid), [selectedDocument]);
   const rejectedFeedback    = useMemo(() => isEmployee && docStatus === 'rejected' ? invalidSubmitted : [], [isEmployee, docStatus, invalidSubmitted]);
+
+  // Defense-in-depth: guard placed AFTER all hooks (rules-of-hooks compliance)
+  if (user && isEmployee) {
+    return <Navigate to="/dashboard" replace />;
+  }
 
   return (
     <Layout>

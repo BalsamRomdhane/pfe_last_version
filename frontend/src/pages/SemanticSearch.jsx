@@ -99,7 +99,6 @@ function ResultRow({ result, rank }) {
 export default function SemanticSearch() {
   // Defense-in-depth: route is ADMIN+TEAMLEAD only in App.js
   const { user } = useContext(UserContext);
-  if (user && user.role === 'EMPLOYEE') return null;
   const [query,      setQuery]     = useState('');
   const [standards,  setStandards] = useState([]);
   const [standard,   setStandard]  = useState('');
@@ -133,6 +132,9 @@ export default function SemanticSearch() {
       setError(err.response?.data?.detail || err.response?.data?.message || 'Search failed. Please try again.');
     } finally { setLoading(false); }
   };
+
+  // Guard placed AFTER all hooks (rules-of-hooks compliance)
+  if (user && user.role === 'EMPLOYEE') return null;
 
   return (
     <Layout>

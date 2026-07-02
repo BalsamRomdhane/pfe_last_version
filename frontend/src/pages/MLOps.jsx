@@ -462,11 +462,6 @@ function StandardCard({ std, onTrigger, triggering }) {
 export default function MLOps() {
   const { user } = useContext(UserContext);
 
-  // Defense-in-depth: route is already protected in App.js
-  if (user && user.role !== 'ADMIN') {
-    return null;
-  }
-
   const [data,          setData]         = useState(null);
   const [loading,       setLoading]      = useState(true);
   const [error,         setError]        = useState('');
@@ -556,6 +551,9 @@ export default function MLOps() {
       setTriggering('');
     }
   };
+
+  // Guard placed AFTER all hooks (rules-of-hooks compliance)
+  if (user && user.role !== 'ADMIN') return null;
 
   return (
     <Layout>
