@@ -288,14 +288,16 @@ const Topbar = ({ onToggleSidebar }) => {
                   </p>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => { navigate('/system'); setMenuOpen(false); }}
-                  className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
-                >
-                  <Settings size={14} />
-                  Settings
-                </button>
+                {user?.role === 'ADMIN' && (
+                  <button
+                    type="button"
+                    onClick={() => { navigate('/system'); setMenuOpen(false); }}
+                    className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
+                  >
+                    <Settings size={14} />
+                    Settings
+                  </button>
+                )}
 
                 <div className="my-1 border-t border-slate-100" />
 

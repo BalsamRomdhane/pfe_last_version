@@ -1,5 +1,5 @@
 import React, { useContext, useEffect, useMemo, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import { UserContext } from '../context/UserContext';
 import Layout from './Layout';
 import StatusBadge from './StatusBadge';
@@ -67,6 +67,13 @@ function RuleRow({ item, index, onChange }) {
 /* ─── Validations page ─────────────────────────────────────────────────── */
 const Validations = () => {
   const { user }            = useContext(UserContext);
+
+  // Defense-in-depth: employees must never reach this page.
+  // The route is already protected in App.js (ADMIN + TEAMLEAD only).
+  if (user && user.role === 'EMPLOYEE') {
+    return <Navigate to="/dashboard" replace />;
+  }
+
   const [searchParams, setSearchParams] = useSearchParams();
   const [selectedDocument,  setSelectedDocument]  = useState(null);
   const [docSearch,         setDocSearch]          = useState('');

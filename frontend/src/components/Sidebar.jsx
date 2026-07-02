@@ -52,7 +52,7 @@ const NAV = [
     items: [
       { label: 'Users',       icon: Users,     path: '/users',       roles: ['ADMIN'] },
       { label: 'Departments', icon: Building2, path: '/departments', roles: ['ADMIN'] },
-      { label: 'System',      icon: Settings,  path: '/system',      roles: ['ADMIN','TEAMLEAD'] },
+      { label: 'System',      icon: Settings,  path: '/system',      roles: ['ADMIN'] },
     ],
   },
 ];

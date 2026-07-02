@@ -2,7 +2,7 @@
  * MLOps Pipeline Dashboard — /admin/mlops
  * Training jobs, drift detection, Jenkins integration.
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import {
   GitBranch, RefreshCw, Zap, Loader2, Play,
   CheckCircle2, XCircle, Clock, AlertTriangle,
@@ -10,6 +10,7 @@ import {
   WifiOff, ShieldAlert, Search,
 } from 'lucide-react';
 import Layout from '../components/Layout';
+import { UserContext } from '../context/UserContext';
 import api from '../services/api';
 
 /* ── helpers ─────────────────────────────────────────────────────── */
@@ -459,6 +460,13 @@ function StandardCard({ std, onTrigger, triggering }) {
 
 /* ══════════════════════════ MAIN PAGE ═══════════════════════════ */
 export default function MLOps() {
+  const { user } = useContext(UserContext);
+
+  // Defense-in-depth: route is already protected in App.js
+  if (user && user.role !== 'ADMIN') {
+    return null;
+  }
+
   const [data,          setData]         = useState(null);
   const [loading,       setLoading]      = useState(true);
   const [error,         setError]        = useState('');

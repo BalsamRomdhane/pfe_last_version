@@ -2,12 +2,13 @@
  * Compliance Dashboard — /compliance-dashboard
  * Executive overview: maturity, coverage, readiness, risks, reviews, audit log.
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useState } from 'react';
 import {
   ShieldCheck, ShieldAlert, Shield, AlertTriangle, RefreshCw,
   BarChart3, Clock, FileWarning, Activity, TrendingUp, BookOpen,
 } from 'lucide-react';
 import Layout from '../components/Layout';
+import { UserContext } from '../context/UserContext';
 import api from '../services/api';
 
 /* ── helpers ─────────────────────────────────────────────────────── */
@@ -256,6 +257,7 @@ function SubModules() {
 
 /* ══════════════════════════ MAIN PAGE ═══════════════════════════ */
 export default function ComplianceDashboard() {
+  const { user } = useContext(UserContext);
   const [data,       setData]       = useState(null);
   const [loading,    setLoading]    = useState(true);
   const [error,      setError]      = useState('');
@@ -311,11 +313,13 @@ export default function ComplianceDashboard() {
                 <ReadinessIcon size={12} />
                 {overallReadiness.replace('_', ' ')}
               </span>
-              <button type="button" onClick={handleRefresh} disabled={refreshing || loading}
-                className="flex items-center gap-1.5 rounded-xl border border-slate-700 bg-white/5 px-3 py-2 text-xs font-semibold text-slate-300 hover:bg-white/10 disabled:opacity-50 transition">
-                <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} />
-                {refreshing ? 'Refreshing…' : 'Refresh'}
-              </button>
+              {user?.role === 'ADMIN' && (
+                <button type="button" onClick={handleRefresh} disabled={refreshing || loading}
+                  className="flex items-center gap-1.5 rounded-xl border border-slate-700 bg-white/5 px-3 py-2 text-xs font-semibold text-slate-300 hover:bg-white/10 disabled:opacity-50 transition">
+                  <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} />
+                  {refreshing ? 'Refreshing…' : 'Refresh'}
+                </button>
+              )}
             </div>
           </div>
         </div>

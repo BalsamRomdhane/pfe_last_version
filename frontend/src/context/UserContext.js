@@ -18,10 +18,11 @@ const buildUserFromToken = (tokenValue, profile) => {
   const decoded = jwtDecode(tokenValue);
   let role = profile?.role || null;
   if (!role) {
-    role = decoded.realm_access?.roles?.[0] || null;
+    const BUSINESS_ROLES = ['ADMIN', 'TEAMLEAD', 'EMPLOYEE'];
+    role = decoded.realm_access?.roles?.find(r => BUSINESS_ROLES.includes(r)) || null;
     if (!role && decoded.resource_access) {
       const client = Object.values(decoded.resource_access)[0];
-      role = client?.roles?.[0] || null;
+      role = client?.roles?.find(r => BUSINESS_ROLES.includes(r)) || null;
     }
   }
 
