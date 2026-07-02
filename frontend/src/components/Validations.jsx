@@ -1,5 +1,5 @@
 import React, { useContext, useEffect, useMemo, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import { UserContext } from '../context/UserContext';
 import Layout from './Layout';
 import StatusBadge from './StatusBadge';
@@ -207,6 +207,11 @@ const Validations = () => {
   const docStatus           = selectedDocument?.status;
   const invalidSubmitted    = useMemo(() => (selectedDocument?.validations || []).filter(v => !v.is_valid), [selectedDocument]);
   const rejectedFeedback    = useMemo(() => isEmployee && docStatus === 'rejected' ? invalidSubmitted : [], [isEmployee, docStatus, invalidSubmitted]);
+
+  // Defense-in-depth: guard placed AFTER all hooks (rules-of-hooks compliance)
+  if (user && isEmployee) {
+    return <Navigate to="/dashboard" replace />;
+  }
 
   return (
     <Layout>

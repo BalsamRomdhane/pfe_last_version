@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useContext, useEffect, useState } from 'react';
 import { CheckCircle2, XCircle, UploadCloud, ScanSearch, X, AlertCircle } from 'lucide-react';
 import Layout from '../components/Layout';
 import SeverityBadge from '../components/SeverityBadge';
 import EmptyState from '../components/common/EmptyState';
 import api from '../services/api';
+import { UserContext } from '../context/UserContext';
 
 /* ─── Score card ───────────────────────────────────────────────────────── */
 function ScoreCard({ label, value, color, suffix = '%' }) {
@@ -77,6 +78,8 @@ function RuleResult({ rule, index }) {
 
 /* ─── DocumentAnalysis page ────────────────────────────────────────────── */
 export default function DocumentAnalysis() {
+  // Defense-in-depth: route is ADMIN+TEAMLEAD only in App.js
+  const { user } = useContext(UserContext);
   const [normes,          setNormes]          = useState([]);
   const [selectedNormeId, setSelectedNormeId] = useState(null);
   const [file,            setFile]            = useState(null);
@@ -120,6 +123,9 @@ export default function DocumentAnalysis() {
   const validCount   = analysis?.valid_count   || 0;
   const invalidCount = analysis?.invalid_count || 0;
   const totalRules   = analysis?.total_rules   || 0;
+
+  // Guard placed AFTER all hooks (rules-of-hooks compliance)
+  if (user && user.role === 'EMPLOYEE') return null;
 
   return (
     <Layout>

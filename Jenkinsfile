@@ -12,10 +12,11 @@ pipeline {
         PYTHONUTF8       = "1"
 
         // PostgreSQL — adapter selon la machine locale
-        DB_HOST = "localhost"
-        DB_PORT = "5432"
-        DB_NAME = "compliance_db"
-        DB_USER = "postgres"
+        DB_HOST     = "localhost"
+        DB_PORT     = "5432"
+        DB_NAME     = "compliance_db"
+        DB_USER     = "postgres"
+        DB_PASSWORD = ""
     }
 
     // ── Parametres de build ─────────────────────────────────────────

@@ -3,7 +3,7 @@
  * Full MLOps module: health score, coverage, analytics, table, readiness.
  * Uses real PostgreSQL data only.
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import {
   Database, CheckCircle2, XCircle, BarChart3, Shield,
   TrendingUp, RefreshCw, AlertTriangle, Target,
@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import api from '../services/api';
+import { UserContext } from '../context/UserContext';
 
 /* ── helpers ─────────────────────────────────────────────────── */
 const safeN   = (v) => (v == null ? '—' : Number(v).toLocaleString());
@@ -115,6 +116,8 @@ function CoverageRow({ rule, total, approved, rejected }) {
 
 /* ══════════════════════════ MAIN PAGE ═══════════════════════════ */
 export default function TrainingDataset() {
+  // Defense-in-depth: route is already ADMIN-only in App.js
+  const { user } = useContext(UserContext);
   const [norms,     setNorms]     = useState([]);
   const [normId,    setNormId]    = useState('');
   const [stats,     setStats]     = useState(null);
@@ -212,6 +215,9 @@ export default function TrainingDataset() {
   ];
 
   const totalPages = Math.max(1, Math.ceil(sTotal / PAGE_SIZE));
+
+  // Guard placed AFTER all hooks (rules-of-hooks compliance)
+  if (user && user.role !== 'ADMIN') return null;
 
   return (
     <Layout>

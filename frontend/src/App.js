@@ -98,7 +98,7 @@ function AppContent() {
         <Route path="/dashboard"  element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
         <Route path="/documents"  element={<ProtectedRoute><Documents /></ProtectedRoute>} />
         <Route path="/documents/:id" element={<ProtectedRoute><DocumentDetail /></ProtectedRoute>} />
-        <Route path="/system"     element={<ProtectedRoute><System /></ProtectedRoute>} />
+        <Route path="/system"     element={<RoleProtectedRoute roles={['ADMIN']}><System /></RoleProtectedRoute>} />
 
         {/* Employee-specific pages */}
         <Route path="/profile"       element={<ProtectedRoute><EmployeeProfile /></ProtectedRoute>} />

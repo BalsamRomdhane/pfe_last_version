@@ -2,13 +2,14 @@
  * Dataset Quality — /dataset-quality
  * Evidence quality report, duplicates, per-rule distribution.
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useState } from 'react';
 import {
   Database, AlertTriangle, CheckCircle2, RefreshCw,
   BarChart3, Shield, TrendingUp,
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import api from '../services/api';
+import { UserContext } from '../context/UserContext';
 
 /* ── helpers ─────────────────────────────────────────────────────── */
 const safeN  = (v) => (v == null ? '—' : Number(v).toLocaleString());
@@ -53,6 +54,8 @@ function QualityBar({ label, value, max = 100 }) {
 
 /* ══════════════════════════ MAIN PAGE ═══════════════════════════ */
 export default function DatasetQuality() {
+  // Defense-in-depth: route is already ADMIN-only in App.js
+  const { user } = useContext(UserContext);
   const [report,   setReport]   = useState(null);
   const [loading,  setLoading]  = useState(true);
   const [error,    setError]    = useState('');
@@ -95,6 +98,9 @@ export default function DatasetQuality() {
   };
 
   const ev         = report?.evidence || {};
+
+  // Guard placed AFTER all hooks (rules-of-hooks compliance)
+  if (user && user.role !== 'ADMIN') return null;
   const dups       = {
     total:           ev.total ?? 0,
     unique:          ev.unique ?? 0,

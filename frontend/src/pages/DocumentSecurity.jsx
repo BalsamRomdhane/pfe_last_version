@@ -2,7 +2,7 @@
  * DocumentSecurity.jsx — Document Security Analysis Page
  * Enterprise ISO Compliance Platform
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Lock, ShieldAlert, ShieldCheck, AlertTriangle,
@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import api from '../services/api';
+import { UserContext } from '../context/UserContext';
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
 const fmt = (iso) => {
@@ -689,12 +690,18 @@ const TABS = [
 ];
 
 export default function DocumentSecurity() {
+  // Defense-in-depth: route is already ADMIN+TEAMLEAD only in App.js
+  const { user } = useContext(UserContext);
+
   const [tab, setTab] = useState('dashboard');
   const [kpis, setKpis] = useState(null);
 
   useEffect(() => {
     api.get('security/dashboard/').then(r => setKpis(r.data)).catch(() => {});
   }, []);
+
+  // Guard placed AFTER all hooks (rules-of-hooks compliance)
+  if (user && user.role === 'EMPLOYEE') return null;
 
   return (
     <Layout>

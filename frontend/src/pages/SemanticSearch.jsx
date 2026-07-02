@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useContext, useEffect, useState } from 'react';
 import { Search, Activity, Brain, X } from 'lucide-react';
 import Layout from '../components/Layout';
 import EmptyState from '../components/common/EmptyState';
 import api from '../services/api';
+import { UserContext } from '../context/UserContext';
 /* ─── Score bar ────────────────────────────────────────────────────────── */
 function ScoreBar({ value, max = 1, color = 'bg-brand-500' }) {
   const pct = Math.min(100, Math.max(0, (value / Math.max(max, 0.0001)) * 100));
@@ -96,6 +97,8 @@ function ResultRow({ result, rank }) {
 
 /* ─── SemanticSearch page ──────────────────────────────────────────────── */
 export default function SemanticSearch() {
+  // Defense-in-depth: route is ADMIN+TEAMLEAD only in App.js
+  const { user } = useContext(UserContext);
   const [query,      setQuery]     = useState('');
   const [standards,  setStandards] = useState([]);
   const [standard,   setStandard]  = useState('');
@@ -129,6 +132,9 @@ export default function SemanticSearch() {
       setError(err.response?.data?.detail || err.response?.data?.message || 'Search failed. Please try again.');
     } finally { setLoading(false); }
   };
+
+  // Guard placed AFTER all hooks (rules-of-hooks compliance)
+  if (user && user.role === 'EMPLOYEE') return null;
 
   return (
     <Layout>
