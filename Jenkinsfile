@@ -1,32 +1,3 @@
-// ══════════════════════════════════════════════════════════════════════
-// Jenkinsfile — Enterprise ISO Compliance Platform
-// Pipeline MLOps + DevSecOps — Windows local, sans Docker
-//
-// STAGES :
-//   1  · Checkout
-//   2  · Install Dependencies
-//   3  · Django Check & Migrate
-//   4  · Dataset Validation
-//   5  · Drift Detection
-//   6  · SonarQube Analysis        (DevSecOps)
-//   7  · Quality Gate              (DevSecOps)
-//   8  · ML Training
-//   9  · Export Metriques
-//   10 · TrainingJob Update
-//   11 · Cleanup
-//
-// ARCHITECTURE :
-//   Tout le code Python multi-lignes est dans backend/ci/*.py
-//   Les stages bat n'appellent que des commandes simples sur une ligne
-//   Aucun bloc python -c "..." multi-lignes dans ce fichier
-//
-// SONARQUBE :
-//   - Jenkins tool name  : SonarScanner   (Manage Jenkins > Tools)
-//   - Jenkins server name: SonarQube      (Manage Jenkins > System > SonarQube Servers)
-//   - Credential ID      : sonarqube-token (Secret Text)
-//   - sonar-project.properties au root du workspace
-//   - Aucun token ni URL hardcodes — injectes par withSonarQubeEnv
-// ══════════════════════════════════════════════════════════════════════
 
 pipeline {
     agent any
@@ -42,10 +13,11 @@ pipeline {
         PYTHONUTF8       = "1"
 
         // PostgreSQL — adapter selon la machine locale
-        DB_HOST = "localhost"
-        DB_PORT = "5432"
-        DB_NAME = "compliance_db"
-        DB_USER = "postgres"
+        DB_HOST     = "localhost"
+        DB_PORT     = "5432"
+        DB_NAME     = "compliance_db"
+        DB_USER     = "postgres"
+        DB_PASSWORD = ""
     }
 
     // ── Parametres de build ─────────────────────────────────────────
